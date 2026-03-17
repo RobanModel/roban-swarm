@@ -347,9 +347,8 @@ echo
 echo "MAVLink Hub:"
 systemctl is-active mavlink-hub 2>/dev/null | sed 's/^/  Status: /'
 echo "  Config: /etc/mavlink-router/main.conf"
-echo "  GCS port: 14550/udp"
-echo "  Heli telemetry ports: 14560-14569/udp"
-echo "  Heli command ports:  14660-14669/udp"
+echo "  GCS port: 14550/udp + 5760/tcp"
+echo "  Heli ports: 14560-14569/udp (bidirectional)"
 echo
 echo "NTP (chrony):"
 systemctl is-active chrony 2>/dev/null | sed 's/^/  Status: /'
@@ -361,8 +360,8 @@ echo "  67/udp (DHCP)"
 echo "  123/udp (NTP)"
 echo "  2101/tcp (NTRIP)"
 echo "  14550/udp (GCS MAVLink)"
-echo "  14560-14569/udp (Heli MAVLink telemetry)"
-echo "  14660-14669/udp (Heli MAVLink command return)"
+echo "  5760/tcp (GCS MAVLink TCP — for Mission Planner)"
+echo "  14560-14569/udp (Heli MAVLink bidirectional)"
 echo
 echo "Next steps:"
 echo "  1. Edit $SWARM_CONF_DIR/rtkbase.env (serial port + credentials)"

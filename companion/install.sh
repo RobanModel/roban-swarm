@@ -326,15 +326,14 @@ MavlinkDialect = ardupilotmega
 Device = $FC_SERIAL
 Baud = $FC_BAUD
 
-[UdpEndpoint to_base]
+# Bidirectional link to base station hub
+# NOTE: Single endpoint prevents routing loops (separate in/out ports
+# caused mavlink-router to echo FC messages back, creating exponential
+# packet amplification — 7000+ pkt/s instead of 65).
+[UdpEndpoint base]
 Mode = Normal
 Address = $BASE_IP
 Port = $UDP_PORT
-
-[UdpEndpoint from_base]
-Mode = Server
-Address = 0.0.0.0
-Port = $CMD_PORT
 
 [UdpEndpoint gps_bridge]
 Mode = Server

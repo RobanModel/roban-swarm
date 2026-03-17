@@ -496,7 +496,127 @@ Delete `/etc/roban-swarm/provisioned` and reboot → back to setup mode.
 
 ---
 
-## Current Status (as of 2026-03-16)
+## Session 9 — 2026-03-17 (FC Link + MAVLink Routing Fix)
+
+**Goal:** Wire FC to OPi, connect Mission Planner via WiFi, fix packet loss.
+
+### FC wiring verified
+- Wired FC TELEM port to OPi header: pin 8 (TX) → FC RX, pin 10 (RX) ← FC TX, pin 9 GND
+- Raw UART0 test: **235 MAVLink v2 frames in 5s, zero junk bytes, 47 msg/s**
+- FC sysid=11, compid=1, all standard messages (HEARTBEAT, ATTITUDE, GPS_RAW_INT, etc.)
+- `GPS_TYPE` already set to 14 (MAVLink GPS) ✅
+
+### Mission Planner connected
+- Connected Windows laptop (192.168.50.159) to `Robanswarm` WiFi
+- Mission Planner connected via UDP 14550 to base station hub
+- FC appeared as sysid 11, DISARMED, telemetry flowing
+
+### Critical bug found: MAVLink routing loop
+**Symptom:** 50-80% packet loss in Mission Planner, MAVFTP parameter download
+failing, SSH to base station dying when MP connected.
+
+**Root cause:** Separate in/out UDP ports per heli created an **exponential
+routing loop**:
+1. OPi receives FC msg (sysid=11) on UART → sends to `to_base` (port 14560)
+2. Base hub receives on `heli01_in` (14560) → forwards to ALL endpoints
+   including `heli01_cmd` (port 14660)
+3. OPi receives sysid=11 back on `from_base` (14660) → `from_base ≠ to_base`
+   so mavlink-router forwards it to `to_base` (14560) again
+4. Goto 2 — infinite loop
+
+**Measured:** 7,200 UDP packets/sec on port 14560 (expected: ~65 msg/s from FC).
+This flooded WiFi, saturated the hub, and killed SSH.
+
+**Fix:** Replaced separate in/out endpoints with a **single bidirectional
+endpoint** on both the companion and base station:
+
+Companion config (before):
+```
+[UdpEndpoint to_base]       # OUT
+Mode = Normal
+Address = 192.168.50.1
+Port = 14560
+
+[UdpEndpoint from_base]     # IN — creates loop!
+Mode = Server
+Address = 0.0.0.0
+Port = 14660
+```
+
+Companion config (after):
+```
+[UdpEndpoint base]          # single bidirectional
+Mode = Normal
+Address = 192.168.50.1
+Port = 14560
+```
+
+Base hub config (before):
+```
+[UdpEndpoint heli01_in]     # receives from heli
+Mode = Server
+Port = 14560
+
+[UdpEndpoint heli01_cmd]    # sends back to heli — creates loop!
+Mode = Normal
+Address = 192.168.50.101
+Port = 14660
+```
+
+Base hub config (after):
+```
+[UdpEndpoint heli01]        # single bidirectional Server
+Mode = Server
+Port = 14560
+```
+
+**Result after fix:** 38 pkt/s on port 14560 (normal), SSH works while MP
+connected, telemetry smooth.
+
+### TCP endpoint added
+Enabled `TcpServerPort = 5760` on base station hub for reliable GCS connections.
+Added TCP 5760 to nftables firewall (inserted BEFORE drop rule — ordering matters).
+Mission Planner can connect via `tcp:192.168.50.1:5760` for reliable MAVFTP.
+
+### Bandwidth analysis (research)
+- 10 helis at default 4 Hz stream rates = ~40 KB/s total — WiFi handles MB/s
+- WiFi signal excellent: -29 dBm, 0% ping loss, 2-7ms latency
+- WiFi is NEVER the bottleneck; 115200 UART is per-vehicle bottleneck
+- Architecture (OPi companion → UDP → base hub → GCS) matches commercial swarms
+
+### GPS bridge status
+- gps-bridge running, had 3D fix with 5 sats (23.16°N, 113.88°E — Guangzhou)
+- Indoors drops to 0 sats (expected)
+- NTRIP client ready but stopped (outdoor test needed for RTK)
+
+### Provisioning system tested (Session 8 follow-up)
+- Captive portal form worked from phone
+- Entering wrong WiFi password required re-provisioning (factory reset + reboot)
+- Unisoc WiFi driver does NOT support hostapd — wpa_supplicant AP mode works
+- Root password `dopedope` confirmed for HDMI debug access
+
+### Files updated
+- `companion/tools/roban-provision.py`: single `base` endpoint (no `from_base`)
+- `companion/install.sh`: single `base` endpoint, removed `CMD_PORT`
+- `base-station/config/mavlink-routerd.conf`: single Server endpoint per heli,
+  `TcpServerPort = 5760`, removed `_cmd` endpoints
+- `base-station/config/firewall.nft`: added `tcp dport 5760 accept`
+- `base-station/install.sh`: updated summary output
+
+### Issues encountered
+
+| # | Issue | Resolution | Status |
+|---|-------|-----------|--------|
+| 1 | Separate in/out UDP ports create routing loop | Single bidirectional endpoint per heli | Fixed |
+| 2 | 7200 pkt/s flood kills SSH + Mission Planner | Loop fix reduced to normal 38 pkt/s | Fixed |
+| 3 | MAVFTP param download fails over lossy UDP | TCP 5760 added for reliable GCS connections | Fixed |
+| 4 | nftables rule added after `drop` rule | Must use `insert position` before drop | Fixed |
+| 5 | Wrong WiFi password in provisioning form | Factory reset + re-provision | User error |
+| 6 | hostapd fails on Unisoc WiFi driver | Use wpa_supplicant mode=2 with `iw set type __ap` | Fixed (Session 8) |
+
+---
+
+## Current Status (as of 2026-03-17)
 
 ### Phase completion
 
@@ -504,7 +624,7 @@ Delete `/etc/roban-swarm/provisioned` and reboot → back to setup mode.
 |-------|--------|-------|
 | Phase 0: Pre-hardware | Done | OS images ready, WiFi band confirmed (2.4 GHz Unisoc on Zero 2W) |
 | Phase 1: Base station | Done | All services running, NAT/sysctl persisted, NTRIP caster active |
-| Phase 2: First companion | ~95% done | All software running, needs FC wiring + outdoor RTK test |
+| Phase 2: First companion | **~98% done** | FC wired + MAVLink verified, GPS_TYPE=14 set, needs outdoor RTK test |
 | Phase 3: Scale to 10 | In progress | Provisioning system built and tested on Heli01 |
 | Phase 4: Field RTK | Not started | |
 | Phase 5: Soak test | Not started | |
@@ -512,11 +632,12 @@ Delete `/etc/roban-swarm/provisioned` and reboot → back to setup mode.
 
 ### Immediate next steps
 1. ~~Test provisioning on Heli01~~ — **Done** (Session 8)
-2. Wire FC to header pins 8 (TX) / 10 (RX) / 9 (GND) — UART0
-3. Set ArduPilot `GPS_TYPE=14` (MAVLink GPS), `SYSID_THISMAV=11`
-4. Start ntrip-client: `systemctl start ntrip-client`
-5. Outdoor test: verify RTK fix (sky view needed)
-6. Flash production image + provision remaining 9 boards
+2. ~~Wire FC to header pins~~ — **Done** (Session 9, clean MAVLink v2 at 47 msg/s)
+3. ~~Set ArduPilot GPS_TYPE=14~~ — **Done** (already set, confirmed via pymavlink)
+4. ~~Fix MAVLink routing loop~~ — **Done** (Session 9, single bidirectional endpoints)
+5. Start ntrip-client: `systemctl start ntrip-client`
+6. Outdoor test: verify RTK fix (sky view needed)
+7. Flash production image + provision remaining 9 boards
 
 ### Connection details
 - **Base station SSH:** `ssh roban-swarm@192.168.3.119` (home WiFi)
@@ -542,7 +663,7 @@ Pin 1         = 3.3V     → LC29H VCC (if not separately powered)
 
 ### Hardware identity table (partial)
 
-| Heli | MAC | Reserved IP | Telemetry | Command | SYSID | Status |
-|------|-----|-------------|-----------|---------|-------|--------|
-| 01 | `c0:64:94:ab:b4:31` | 192.168.50.101 | 14560 | 14660 | 11 | UARTs configured, needs wiring |
-| 02-10 | TBD | .102-.110 | 14561-14569 | 14661-14669 | 12-20 | Not started |
+| Heli | MAC | Reserved IP | Port | SYSID | Status |
+|------|-----|-------------|------|-------|--------|
+| 01 | `c0:64:94:ab:b4:31` | 192.168.50.101 | 14560 | 11 | FC wired, MAVLink verified, GPS_TYPE=14 ✅ |
+| 02-10 | TBD | .102-.110 | 14561-14569 | 12-20 | Not started |

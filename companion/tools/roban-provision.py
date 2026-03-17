@@ -299,17 +299,14 @@ MavlinkDialect = ardupilotmega
 Device = {DEFAULTS['fc_serial']}
 Baud = {DEFAULTS['fc_baud']}
 
-# Telemetry outbound to base station hub
-[UdpEndpoint to_base]
+# Bidirectional link to base station hub
+# NOTE: Single endpoint prevents routing loops (separate in/out ports
+# caused mavlink-router to echo FC messages back, creating exponential
+# packet amplification — 7000+ pkt/s instead of 65).
+[UdpEndpoint base]
 Mode = Normal
 Address = {DEFAULTS['base_ip']}
 Port = {udp_port}
-
-# Command inbound from base station hub
-[UdpEndpoint from_base]
-Mode = Server
-Address = 0.0.0.0
-Port = {cmd_port}
 
 # Local GPS bridge input
 [UdpEndpoint gps_bridge]

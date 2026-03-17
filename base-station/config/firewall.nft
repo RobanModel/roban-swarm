@@ -36,8 +36,9 @@ table inet roban_swarm {
         # NTRIP caster (RTKBase)
         tcp dport 2101 accept
 
-        # MAVLink GCS endpoint
+        # MAVLink GCS endpoint (UDP + TCP)
         udp dport 14550 accept
+        tcp dport 5760 accept
 
         # MAVLink heli telemetry inbound (14560-14569)
         udp dport 14560-14569 accept
