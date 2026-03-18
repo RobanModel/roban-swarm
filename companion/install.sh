@@ -9,8 +9,7 @@
 # Services installed:
 #   - roban-provision  (AP captive portal for first-boot config)
 #   - mavlink-router   (FC ↔ Base MAVLink)
-#   - ntrip-client     (RTCM corrections via str2str)
-#   - gps-bridge       (NMEA → MAVLink GPS_INPUT)
+#   - gps-bridge       (NMEA → MAVLink GPS_INPUT + integrated NTRIP client)
 #   - roban-watchdog   (service health monitor)
 set -euo pipefail
 
@@ -215,7 +214,7 @@ gps_failures=0
 while true; do
     sleep "$CHECK_INTERVAL"
 
-    for svc in mavlink-router ntrip-client gps-bridge; do
+    for svc in mavlink-router gps-bridge; do
         if ! systemctl is-active "$svc" &>/dev/null; then
             eval "count=\${${svc//-/_}_failures:-0}"
             count=$((count + 1))
@@ -238,14 +237,12 @@ chmod +x "$SWARM_OPT_DIR/watchdog.sh"
 info "Installing systemd services..."
 
 cp "$SCRIPT_DIR/systemd/roban-provision.service" /etc/systemd/system/
-cp "$SCRIPT_DIR/systemd/ntrip-client.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/systemd/mavlink-router.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/systemd/gps-bridge.service" /etc/systemd/system/
 cp "$SCRIPT_DIR/systemd/watchdog.service" /etc/systemd/system/roban-watchdog.service
 
 systemctl daemon-reload
 systemctl enable roban-provision
-systemctl enable ntrip-client
 systemctl enable mavlink-router
 systemctl enable gps-bridge
 systemctl enable roban-watchdog 2>/dev/null || true
@@ -384,7 +381,7 @@ echo "  FC:   /dev/ttyS0 (UART0, header pins 8/10)"
 echo "  GNSS: /dev/ttyS5 (UART5, header pins 11/13)"
 echo
 echo "Services:"
-for svc in roban-provision mavlink-router ntrip-client gps-bridge roban-watchdog; do
+for svc in roban-provision mavlink-router gps-bridge roban-watchdog; do
     status=$(systemctl is-active "$svc" 2>/dev/null || echo "inactive")
     enabled=$(systemctl is-enabled "$svc" 2>/dev/null || echo "disabled")
     printf "  %-20s active=%-12s enabled=%s\n" "$svc" "$status" "$enabled"

@@ -665,5 +665,72 @@ Pin 1         = 3.3V     → LC29H VCC (if not separately powered)
 
 | Heli | MAC | Reserved IP | Port | SYSID | Status |
 |------|-----|-------------|------|-------|--------|
-| 01 | `c0:64:94:ab:b4:31` | 192.168.50.101 | 14560 | 11 | FC wired, MAVLink verified, GPS_TYPE=14 ✅ |
+| 01 | `c0:64:94:ab:b4:31` | 192.168.50.101 | 14560 | 11 | FC wired, MAVLink verified, GPS_TYPE=14, RTK fix ✅ |
 | 02-10 | TBD | .102-.110 | 14561-14569 | 12-20 | Not started |
+
+---
+
+## Session 10 — 2026-03-18 (NTRIP Integration + Serial Fix)
+
+### Serial Port Contention — Root Cause & Fix
+
+**Problem:** gps-bridge.py (reading NMEA) and str2str ntrip-client (writing RTCM)
+both opened `/dev/ttyS5`. Even after stopping str2str, gps-bridge continued
+reporting "device reports readiness to read but returned no data" at ~1 error/s,
+dropping NMEA throughput from 10Hz to 0.5Hz.
+
+**Root cause (two issues):**
+
+1. **H618 UART driver quirk:** pyserial's `readline()` internally uses `read(1)`,
+   which triggers a race with the H618 UART driver where `poll()` reports
+   readiness but the subsequent `read()` returns 0 bytes. pyserial treats this
+   as a `SerialException`.
+
+2. **Serial port contention:** Two processes (str2str + gps-bridge) opening
+   the same serial port simultaneously caused kernel-level buffer conflicts.
+
+**Fix:** Merged NTRIP client into gps-bridge.py (single process owns the port):
+
+- Added `NtripClient` thread that connects to the base station NTRIP caster
+  via raw TCP socket, receives RTCM3 data, and writes it to the serial port
+  using a thread lock
+- Replaced pyserial `readline()` with `select()` + `os.read()` + manual line
+  buffering — handles H618's empty reads gracefully (just counts them, no error)
+- Eliminated str2str dependency on companion entirely
+- ntrip-client.service disabled and removed from install.sh
+
+**Result:**
+```
+gps-bridge: fix=RTK sats=40 lat=23.1610422 lon=113.8821468 alt=47.1m hdop=0.6 rate=9.8Hz rtcm=24.3KB empty=3
+```
+- 9.8Hz NMEA reading (was 0.5Hz with errors)
+- RTK fix with 40 satellites, HDOP 0.6
+- RTCM corrections flowing at ~1.8 kbps
+- Only 2-4 empty reads per 10s (harmless, handled silently)
+
+### NTRIP Caster Protocol Quirk
+
+str2str's NTRIP caster responds with `ICY 200 OK\r\n` (single CRLF), not
+the standard `ICY 200 OK\r\n\r\n` (double CRLF). The initial NtripClient
+implementation waited for `\r\n\r\n` and hung forever. Fixed by checking for
+both patterns.
+
+### Files Changed
+
+- `companion/tools/gps-bridge.py` — complete rewrite:
+  - Added NtripClient thread (RTCM fetch + serial write)
+  - Switched serial reading from pyserial readline() to select()+os.read()
+  - Added RTCM byte counter to stats output
+  - Fix type now printed as name (RTK/Float/3D) instead of number
+- `companion/install.sh` — removed ntrip-client references
+- `companion/systemd/ntrip-client.service` — no longer used (kept in repo for reference)
+
+### Data Flow (Updated)
+
+```
+Base LC29H → USB → str2str ntripc://:2101/BASE → WiFi →
+  → gps-bridge.py NtripClient thread → serial write → LC29HEA RTCM input
+LC29HEA NMEA output → serial read → gps-bridge.py → UDP :14570 → mavlink-router → UART0 → FC
+```
+
+Single process (gps-bridge.py) owns `/dev/ttyS5` for both read (NMEA) and write (RTCM).

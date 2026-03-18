@@ -1,15 +1,30 @@
 # Next Steps Plan — Roban Swarm RTK Field Network
 
-**Status:** Hardware bring-up **in progress**. Base station (Phase 1) is ~90%
-complete — all services running on x86 mini-PC. First Orange Pi Zero has been
-powered on and reached the network. Companion install (Phase 2) is next.
+**Status:** Phase 2 **~99% done** — FC wired, MAVLink verified, GPS_TYPE=14 set,
+routing loop fixed, NTRIP integrated into gps-bridge (RTK fix confirmed indoors).
+Outdoor RTK test outstanding (needs battery).
 
 See [docs/bringup_log.md](bringup_log.md) for detailed session-by-session
 progress, issues encountered, and resolutions.
 
+See [docs/phase2beta_foundation_plan.md](phase2beta_foundation_plan.md) for the
+base station software foundation plan (web UI, swarm controller, mode switching).
+
+## Phase Sequencing
+
+```
+Phase 0  Pre-hardware               ✅ DONE
+Phase 1  Base station                ✅ DONE
+Phase 2  First companion             ~99% (outdoor RTK test outstanding)
+Phase 2β Foundation (base station)   NOT STARTED — web UI, swarm controller
+Phase 3  Scale to 10                 NOT STARTED — flash + provision 9 boards
+Phase 4  Field RTK validation        NOT STARTED
+Phase 5  Soak test                   NOT STARTED
+Phase 6  Hardening                   NOT STARTED
+```
+
 This plan is ordered by dependency — each phase depends on the previous
-one completing. Estimated timeline: **5–7 working days** for a 2-person team
-with all hardware on hand.
+one completing.
 
 ---
 
