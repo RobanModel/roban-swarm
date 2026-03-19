@@ -1,8 +1,9 @@
 # Next Steps Plan — Roban Swarm RTK Field Network
 
-**Status:** Phase 2 **~99% done** — FC wired, MAVLink verified, GPS_TYPE=14 set,
-routing loop fixed, NTRIP integrated into gps-bridge (RTK fix confirmed indoors).
-Outdoor RTK test outstanding (needs battery).
+**Status:** Phase 2 **DONE** — FC wired, MAVLink verified, custom firmware with
+AP_GPS_MAV_ENABLED flashed, GPS_INPUT→FC verified (fix=RTK, 42 sats, hdop=0.5),
+NTRIP integrated into gps-bridge, full chain confirmed indoors.
+Outdoor RTK test is a nice-to-have (needs battery gear).
 
 See [docs/bringup_log.md](bringup_log.md) for detailed session-by-session
 progress, issues encountered, and resolutions.
@@ -15,7 +16,7 @@ base station software foundation plan (web UI, swarm controller, mode switching)
 ```
 Phase 0  Pre-hardware               ✅ DONE
 Phase 1  Base station                ✅ DONE
-Phase 2  First companion             ~99% (outdoor RTK test outstanding)
+Phase 2  First companion             ✅ DONE (outdoor RTK test nice-to-have)
 Phase 2β Foundation (base station)   NOT STARTED — web UI, swarm controller
 Phase 3  Scale to 10                 NOT STARTED — flash + provision 9 boards
 Phase 4  Field RTK validation        NOT STARTED

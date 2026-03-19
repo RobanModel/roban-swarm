@@ -734,3 +734,95 @@ LC29HEA NMEA output → serial read → gps-bridge.py → UDP :14570 → mavlink
 ```
 
 Single process (gps-bridge.py) owns `/dev/ttyS5` for both read (NMEA) and write (RTCM).
+
+---
+
+## Session 10 — 2026-03-20 (Firmware Fix + GPS_INPUT Verified)
+
+**Goal:** Debug why the FC ignores GPS_INPUT messages despite GPS1_TYPE=14.
+
+### Root Cause: AP_GPS_MAV Not Compiled In
+
+The QioTekAdeptF407 has 1MB flash. ArduPilot **disables `AP_GPS_MAV_ENABLED`**
+by default on boards with <2MB flash to save space. The parameter GPS1_TYPE=14
+can be *set* and *saved*, but the firmware has **no code to create the
+AP_GPS_MAV driver**, so GPS_INPUT messages (msg 232) are silently dropped.
+
+Symptoms observed:
+- GPS_RAW_INT always fix=0 sats=0 lat=0 despite sending GPS_INPUT
+- SYS_STATUS GPS sensor bit: present=False, enabled=False, health=False
+- "EKF3 waiting for GPS config data" repeated indefinitely
+- "Sending unknown message (44)" (cosmetic bug — CAMERA_FOV_STATUS, harmless)
+- No error or NAK for GPS_INPUT — completely silent failure
+
+### Debugging Steps
+
+1. Confirmed GPS1_TYPE=14, GPS_AUTO_CONFIG=0 saved and persisted across reboots
+2. Sent 50-99 GPS_INPUT messages directly over serial — zero effect on GPS_RAW_INT
+3. Verified MAVLink v2 encoding correct (msg ID 232, 63-byte payload, 0xFD header)
+4. Verified SERIAL2_PROTOCOL=2 (MAVLink2), baud=115200 — FC communicates fine for
+   heartbeats, params, commands
+5. Tried full param reset + fresh GPS1_TYPE=14 — still no GPS driver created
+6. Tried setting SERIAL3_PROTOCOL=-1 (disable GPS serial) — no change
+7. Attempted MAVFTP to pull `@SYS/features.txt` — file empty on custom build
+8. Confirmed via SYS_STATUS that GPS sensor never shows `present=True`
+
+### Resolution: Custom Firmware Build
+
+Built custom ArduPilot 4.6.3 (ArduHeli) for QioTekAdeptF407 with
+`AP_GPS_MAV_ENABLED 1` added to the board's hwdef.dat. Key details:
+
+- Source repo: `roban-heli-ap` (user's custom build environment)
+- File flashed: `arducopter-heli-4.6.3_with_bl.hex` (dated Mar 19 07:14)
+- **CRITICAL:** An older hex file with the same 4.6.3 version number
+  (dated Mar 18 17:19, without GPS_MAV) existed in the same directory.
+  The AP version number alone cannot distinguish them — always check
+  the file timestamp.
+- Had to reflash via USB after initially uploading the wrong (stale) hex
+
+### Verification After Correct Flash
+
+```
+FC sysid=11  AP 4.6.3
+GPS PRESENT!
+GPS_RAW: fix=3 sats=12 lat=22.54310
+```
+
+GPS_INPUT messages now accepted immediately. FC reports GPS present, 3D fix,
+satellite count and position matching the sent data.
+
+### Full Chain Confirmed
+
+After restarting mavlink-router and gps-bridge services:
+```
+gps-bridge: fix=RTK sats=42 lat=23.1610579 lon=113.8821422 alt=35.3m hdop=0.5 rate=9.7Hz rtcm=12.9KB
+```
+
+Complete data flow working end-to-end:
+```
+Base LC29H → str2str NTRIP caster → WiFi → gps-bridge NTRIP thread → LC29HEA
+LC29HEA → NMEA → gps-bridge → GPS_INPUT → mavlink-router → FC
+FC: GPS PRESENT, fix=RTK, 42 sats, hdop=0.5
+```
+
+### Params Set on FC
+
+- `GPS1_TYPE = 14` (MAVLink GPS) — requires AP_GPS_MAV_ENABLED in firmware
+- `GPS_AUTO_CONFIG = 0` — must be 0 for MAVLink GPS (no serial GPS to configure)
+- `SYSID_THISMAV = 11`
+- `SERIAL2_PROTOCOL = 2` (MAVLink2 on TELEM port to OPi)
+
+### Lessons Learned
+
+1. **AP_GPS_MAV is disabled on 1MB boards by default** — always verify with
+   a custom build if using GPS_TYPE=14 on F407/similar boards
+2. **Silent failure** — ArduPilot stores GPS_TYPE=14 without error even when
+   the MAVLink GPS driver is compiled out. No warning in STATUSTEXT.
+3. **Same version, different firmware** — custom builds with/without a feature
+   can share the same version number. Track by file timestamp or git hash.
+4. **features.txt may be empty** on custom builds — not a reliable way to
+   verify features. Use SYS_STATUS GPS present bit as the definitive check.
+
+### Files Changed
+
+- No code changes in this session — firmware-only fix on the FC side
