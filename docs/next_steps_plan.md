@@ -1,9 +1,8 @@
 # Next Steps Plan — Roban Swarm RTK Field Network
 
-**Status:** Phase 2 **DONE** — FC wired, MAVLink verified, custom firmware with
-AP_GPS_MAV_ENABLED flashed, GPS_INPUT→FC verified (fix=RTK, 42 sats, hdop=0.5),
-NTRIP integrated into gps-bridge, full chain confirmed indoors.
-Outdoor RTK test is a nice-to-have (needs battery gear).
+**Status:** Phase 2β **DONE** — Base controller v0.2.0 running at :8080 with
+live MAVLink telemetry, fleet management, show file format, and flight daemon skeleton.
+RTK chain verified end-to-end (Phase 2). Next: Phase 3 (scale to 2→10 helis).
 
 See [docs/bringup_log.md](bringup_log.md) for detailed session-by-session
 progress, issues encountered, and resolutions.
@@ -17,7 +16,7 @@ base station software foundation plan (web UI, swarm controller, mode switching)
 Phase 0  Pre-hardware               ✅ DONE
 Phase 1  Base station                ✅ DONE
 Phase 2  First companion             ✅ DONE (outdoor RTK test nice-to-have)
-Phase 2β Foundation (base station)   IN PROGRESS — FastAPI + fleet API + web UI deployed
+Phase 2β Foundation (base station)   ✅ DONE — MAVLink telemetry, show format, flight daemon
 Phase 3  Scale to 10                 NOT STARTED — flash + provision 9 boards
 Phase 4  Field RTK validation        NOT STARTED
 Phase 5  Soak test                   NOT STARTED

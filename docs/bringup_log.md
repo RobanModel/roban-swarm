@@ -828,3 +828,84 @@ FC: GPS PRESENT, fix=RTK, 42 sats, hdop=0.5
 ### Files Changed
 
 - No code changes in this session — firmware-only fix on the FC side
+
+---
+
+## Session 11 — 2026-03-20 (Phase 2β: Base Controller + MAVLink Telemetry)
+
+**Goal:** Build the base station web controller — FastAPI app, fleet management,
+MAVLink telemetry pipeline, show file format, and flight daemon skeleton.
+
+### What was done
+
+**Steps 1-2, 4-6 (prior):** FastAPI skeleton + fleet API + web UI
+- Created `base-controller/` with FastAPI app at `:8080`
+- Fleet CRUD API (`/api/fleet`) with JSON persistence + dnsmasq/mavlink-hub config gen
+- Mode switching API (`/api/mode`) — config vs production mode
+- Web dashboard with dark theme: fleet overview cards, fleet manager, config console
+- WebSocket client infrastructure (auto-reconnect, message routing)
+- systemd service `roban-controller.service` running on base station
+
+**Step 3: MAVLink telemetry client**
+- `mavlink/hub_client.py` — async MAVLink TCP client connecting to mavlink-hub `:5760`
+  - Runs pymavlink in thread executor, posts to asyncio event loop
+  - Parses: HEARTBEAT, GPS_RAW_INT, SYS_STATUS, ATTITUDE, GLOBAL_POSITION_INT, VFR_HUD, BATTERY_STATUS
+  - Auto-reconnect on connection loss (3s backoff)
+- `mavlink/vehicle_tracker.py` — per-vehicle state aggregation
+  - VehicleState: armed, flight_mode, GPS fix/sats/hdop, battery, attitude, speed
+  - Online/offline detection via heartbeat watchdog (5s timeout)
+  - ArduCopter/Heli flight mode map (STABILIZE through AUTOROTATE)
+  - Broadcasts `vehicle_update` events to WebSocket clients
+- `main.py` updated:
+  - WebSocket endpoint `/ws/telemetry` — accepts clients, sends state snapshot on connect
+  - VehicleTracker started/stopped in FastAPI lifespan
+  - `/api/vehicles` endpoint for REST polling of live telemetry
+  - `/api/health` now includes `vehicles_online` / `vehicles_total`
+  - Version bumped to 0.2.0
+
+**Step 7: Show file format + flight daemon skeleton**
+- `choreography/show_format.py` — Pydantic models for show file schema v1:
+  - ShowFile (metadata + tracks), HeliTrack (style + waypoints), HeliStyle, Waypoint, Vec3
+  - NED coordinate frame, per-heli flight constraints (max_speed/accel/jerk, angle_max, corner_radius)
+  - Timing validation (monotonic, within duration)
+- `choreography/flight_daemon.py` — flight daemon skeleton:
+  - State machine: IDLE → LOADED → ARMED → RUNNING → DONE
+  - Pre-flight checks: all helis online, GPS fix ≥ 3D
+  - Linear interpolation between waypoints (20 Hz loop)
+  - Hold support at waypoints
+  - Pause/resume/emergency stop
+  - `_send_target()` stubbed — will send SET_POSITION_TARGET_LOCAL_NED via mavlink-hub
+- `docs/show_file_spec.md` — full specification document
+- `docs/example_show.json` — sample show file (hover test for Heli01)
+
+### Architecture Notes
+
+- HubClient uses `run_in_executor` for pymavlink blocking calls — no thread contention
+- VehicleTracker filters sysid >= 250 (GCS/internal traffic)
+- WebSocket broadcasts every MAVLink update — frontend already handles `vehicle_update` events
+- Flight daemon is a "CNC G-code executor" pattern: show file → interpolated targets at 20 Hz
+- Linear interpolation is placeholder — will upgrade to jerk-limited (Ruckig) in Phase 3+
+
+### Files Changed
+
+- `base-controller/main.py` — WebSocket endpoint, VehicleTracker integration, /api/vehicles
+- `base-controller/mavlink/hub_client.py` — NEW: async MAVLink TCP client
+- `base-controller/mavlink/vehicle_tracker.py` — NEW: vehicle state tracker
+- `base-controller/choreography/show_format.py` — NEW: Pydantic show file schema
+- `base-controller/choreography/flight_daemon.py` — NEW: flight daemon skeleton
+- `base-controller/docs/show_file_spec.md` — NEW: show file specification
+- `base-controller/docs/example_show.json` — NEW: example show file
+
+### Phase 2β Status
+
+| Step | Status | Description |
+|------|--------|-------------|
+| 1. FastAPI skeleton | **DONE** | App structure, routing, systemd |
+| 2. Fleet identity API | **DONE** | CRUD, dnsmasq/mavlink-hub config gen |
+| 3. MAVLink telemetry | **DONE** | Hub client, vehicle tracker, WebSocket |
+| 4. Web dashboard | **DONE** | Dark theme, heli cards, live updates |
+| 5. Fleet manager UI | **DONE** | Add/remove helis, apply config |
+| 6. Config console UI | **DONE** | Mode switching, GCS bridge setup |
+| 7. Show format + daemon | **DONE** | Schema v1, flight daemon skeleton |
+
+**Phase 2β is COMPLETE.** Next: Phase 3 (scale to 2→10 helis).

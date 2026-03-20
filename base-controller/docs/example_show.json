@@ -1,0 +1,28 @@
+{
+  "name": "Hover Test — Heli01",
+  "version": 1,
+  "home_lat": 23.12345,
+  "home_lon": 113.54321,
+  "home_alt_m": 45.0,
+  "duration_s": 60.0,
+  "tracks": [
+    {
+      "heli_id": 1,
+      "style": {
+        "max_speed": 3.0,
+        "max_accel": 1.5,
+        "max_jerk": 4.0,
+        "angle_max_deg": 20.0,
+        "corner_radius": 1.5
+      },
+      "waypoints": [
+        { "t": 0,  "pos": { "n": 0, "e": 0, "d": 0 } },
+        { "t": 10, "pos": { "n": 0, "e": 0, "d": -5 }, "hold_s": 10 },
+        { "t": 30, "pos": { "n": 5, "e": 0, "d": -5 } },
+        { "t": 40, "pos": { "n": 5, "e": 5, "d": -5 } },
+        { "t": 50, "pos": { "n": 0, "e": 0, "d": -5 } },
+        { "t": 58, "pos": { "n": 0, "e": 0, "d": 0 } }
+      ]
+    }
+  ]
+}
