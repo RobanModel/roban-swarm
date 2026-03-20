@@ -616,7 +616,7 @@ Mission Planner can connect via `tcp:192.168.50.1:5760` for reliable MAVFTP.
 
 ---
 
-## Current Status (as of 2026-03-17)
+## Current Status (as of 2026-03-20)
 
 ### Phase completion
 
@@ -624,7 +624,8 @@ Mission Planner can connect via `tcp:192.168.50.1:5760` for reliable MAVFTP.
 |-------|--------|-------|
 | Phase 0: Pre-hardware | Done | OS images ready, WiFi band confirmed (2.4 GHz Unisoc on Zero 2W) |
 | Phase 1: Base station | Done | All services running, NAT/sysctl persisted, NTRIP caster active |
-| Phase 2: First companion | **~98% done** | FC wired + MAVLink verified, GPS_TYPE=14 set, needs outdoor RTK test |
+| Phase 2: First companion | **DONE** | Full chain verified: GPS_INPUT→FC, RTK fix, 42 sats, hdop=0.5. Outdoor test nice-to-have (needs battery gear) |
+| Phase 2β: Foundation | **NOT STARTED** | Web UI, fleet management, swarm controller foundation |
 | Phase 3: Scale to 10 | In progress | Provisioning system built and tested on Heli01 |
 | Phase 4: Field RTK | Not started | |
 | Phase 5: Soak test | Not started | |
@@ -635,9 +636,10 @@ Mission Planner can connect via `tcp:192.168.50.1:5760` for reliable MAVFTP.
 2. ~~Wire FC to header pins~~ — **Done** (Session 9, clean MAVLink v2 at 47 msg/s)
 3. ~~Set ArduPilot GPS_TYPE=14~~ — **Done** (already set, confirmed via pymavlink)
 4. ~~Fix MAVLink routing loop~~ — **Done** (Session 9, single bidirectional endpoints)
-5. Start ntrip-client: `systemctl start ntrip-client`
-6. Outdoor test: verify RTK fix (sky view needed)
-7. Flash production image + provision remaining 9 boards
+5. ~~Start NTRIP + verify RTK~~ — **Done** (Session 10, RTK fix confirmed indoors)
+6. ~~Custom firmware with AP_GPS_MAV~~ — **Done** (Session 10, 4.6.3 + AP_GPS_MAV_ENABLED)
+7. Phase 2β: Build base station web UI + fleet management
+8. Phase 3: Provision second heli, then scale to 10
 
 ### Connection details
 - **Base station SSH:** `ssh roban-swarm@192.168.3.119` (home WiFi)
@@ -665,7 +667,7 @@ Pin 1         = 3.3V     → LC29H VCC (if not separately powered)
 
 | Heli | MAC | Reserved IP | Port | SYSID | Status |
 |------|-----|-------------|------|-------|--------|
-| 01 | `c0:64:94:ab:b4:31` | 192.168.50.101 | 14560 | 11 | FC wired, MAVLink verified, GPS_TYPE=14, RTK fix ✅ |
+| 01 | `c0:64:94:ab:b4:31` | 192.168.50.101 | 14560 | 11 | FC wired, AP 4.6.3+GPS_MAV, GPS_INPUT→FC, RTK fix=42sats ✅ |
 | 02-10 | TBD | .102-.110 | 14561-14569 | 12-20 | Not started |
 
 ---
