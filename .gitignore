@@ -24,3 +24,9 @@ Thumbs.db
 *.o
 *.deb
 *.tar.gz
+
+# Disk images (multi-GB, stored on OneDrive not git)
+images/*.img
+images/*.img.gz
+images/*.img.xz
+images/*.img.zst

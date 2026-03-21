@@ -13,15 +13,15 @@ fi
 
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <heli-id>"
-    echo "  heli-id: 01 through 10"
+    echo "  heli-id: 1 through 99 (zero-padded ok: 01, 02, ...)"
     exit 1
 fi
 
 HELI_ID="$1"
 
-# Validate heli ID
-if ! echo "$HELI_ID" | grep -qE '^(0[1-9]|10)$'; then
-    echo "ERROR: Heli ID must be 01 through 10. Got: $HELI_ID" >&2
+# Validate heli ID (1-99)
+if ! echo "$HELI_ID" | grep -qE '^[0-9]{1,2}$' || [ "$((10#$HELI_ID))" -lt 1 ] || [ "$((10#$HELI_ID))" -gt 99 ]; then
+    echo "ERROR: Heli ID must be 1 through 99. Got: $HELI_ID" >&2
     exit 1
 fi
 
