@@ -15,6 +15,11 @@ class HeliCreate(BaseModel):
     name: Optional[str] = None
 
 
+class HeliRegister(BaseModel):
+    """Auto-registration request from a new companion board."""
+    mac: str = Field(..., pattern=r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
+
+
 class HeliUpdate(BaseModel):
     mac: Optional[str] = Field(None, pattern=r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
     name: Optional[str] = None
@@ -63,6 +68,41 @@ async def update_heli(heli_id: int, update: HeliUpdate):
 async def delete_heli(heli_id: int):
     if not fleet_store.delete(heli_id):
         raise HTTPException(status_code=404, detail="Heli not found")
+
+
+@router.post("/fleet/register", response_model=HeliOut, status_code=201)
+async def register_heli(reg: HeliRegister):
+    """Auto-register a new companion board by MAC address.
+
+    Called by the companion's roban-provision.py on first boot.
+    Assigns the next available heli ID, registers the MAC, applies
+    dnsmasq + mavlink-hub configs, and returns the full assignment.
+    If the MAC is already registered, returns the existing assignment (409).
+    """
+    mac = reg.mac.lower()
+
+    # Check if this MAC is already registered
+    for h in fleet_store.list_all():
+        if h["mac"] == mac:
+            raise HTTPException(
+                status_code=409,
+                detail=f"MAC {mac} already registered as Heli {h['id']:02d}",
+            )
+
+    # Find next available heli ID (1-99)
+    existing_ids = {h["id"] for h in fleet_store.list_all()}
+    next_id = None
+    for i in range(1, 100):
+        if i not in existing_ids:
+            next_id = i
+            break
+    if next_id is None:
+        raise HTTPException(status_code=507, detail="Fleet full (99 helis)")
+
+    # Register and apply configs
+    result = fleet_store.add(next_id, mac, f"Heli{next_id:02d}")
+    fleet_store.apply_configs()
+    return result
 
 
 @router.post("/fleet/apply")

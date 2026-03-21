@@ -1,3 +1,32 @@
+#!/bin/bash
+set -e
+
+IMG=/workdir/roban-heli-golden.img
+
+# Mount the image
+OFFSET=$((8192 * 512))
+mkdir -p /mnt/img
+mount -o loop,offset=$OFFSET $IMG /mnt/img
+echo "✓ Mounted image"
+
+# 1. Write WiFi netplan config
+cat > /mnt/img/etc/netplan/50-roban-wifi.yaml <<'NETPLAN'
+# Roban Swarm — WiFi client config (baked into golden image)
+network:
+  version: 2
+  renderer: networkd
+  wifis:
+    wlan0:
+      dhcp4: true
+      access-points:
+        "Robanswarm":
+          password: "dopedope"
+NETPLAN
+chmod 600 /mnt/img/etc/netplan/50-roban-wifi.yaml
+echo "✓ WiFi config written"
+
+# 2. Write auto-provision script (replaces captive portal on first boot)
+cat > /mnt/img/opt/roban-swarm/roban-provision.py <<'PROVISION'
 #!/usr/bin/env python3
 """
 Roban Swarm — Companion Auto-Provisioning
@@ -249,3 +278,34 @@ def main():
 
 if __name__ == "__main__":
     main()
+PROVISION
+chmod 755 /mnt/img/opt/roban-swarm/roban-provision.py
+echo "✓ Auto-provision script written"
+
+# 3. Keep the old captive portal as fallback
+if [ -f /mnt/img/opt/roban-swarm/roban-provision.py.bak ]; then
+    echo "  (backup already exists)"
+else
+    # The old one was already replaced above, but it's in the repo
+    echo "  (captive portal available in repo as fallback)"
+fi
+
+# 4. Verify key files
+echo ""
+echo "=== Verification ==="
+echo "WiFi config:"
+cat /mnt/img/etc/netplan/50-roban-wifi.yaml
+echo ""
+echo "heli.env (should be placeholder):"
+cat /mnt/img/etc/roban-swarm/heli.env
+echo ""
+echo "Provisioned flag:"
+ls -la /mnt/img/etc/roban-swarm/provisioned 2>&1 || echo "  ✓ No provisioned flag (good)"
+echo ""
+echo "Provision script (first 3 lines):"
+head -3 /mnt/img/opt/roban-swarm/roban-provision.py
+
+# Unmount
+umount /mnt/img
+echo ""
+echo "✓ Image patched and unmounted. Ready to flash!"
