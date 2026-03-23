@@ -137,3 +137,33 @@ For 10 modules, the procedure takes ~2 minutes each:
 5. Label and set aside
 
 Consider doing all 10 in one batch before wiring to OPis.
+
+## FC Parameters (after wiring LC29HEA to OPi)
+
+The flight controller must also be configured to accept GPS data via MAVLink
+from the OPi companion. **Requires custom firmware** with `AP_GPS_MAV_ENABLED 1`
+(stock ArduPilot on 1MB boards has this compiled out).
+
+### Firmware
+
+Flash `arducopter-heli-4.6.3_with_bl.hex` (custom build with AP_GPS_MAV).
+See `docs/bringup_log.md` Session 10 for details.
+
+### Required ArduPilot Parameters
+
+Set via Mission Planner or MAVProxy in config mode:
+
+```
+GPS1_TYPE      = 14    # MAVLink GPS — receives GPS_INPUT from gps-bridge
+GPS_AUTO_CONFIG = 0    # Must be 0 for MAVLink GPS (no serial GPS to configure)
+SERIAL2_PROTOCOL = 2   # MAVLink2 on TELEM port (connected to OPi UART0)
+SERIAL2_BAUD   = 111   # 115200 baud (must match mavlink-router config)
+SYSID_THISMAV  = N     # 11 for Heli01, 12 for Heli02, ... (10 + heli_id)
+```
+
+### Verification
+
+After setting params and rebooting the FC:
+- GPS_RAW_INT should show fix type 3+ (3D), 5 (RTK Float), or 6 (RTK Fixed)
+- SYS_STATUS should show GPS bit set in `sensors_present`
+- Dashboard should show green GPS status with satellite count
