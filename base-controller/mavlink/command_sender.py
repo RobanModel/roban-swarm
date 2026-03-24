@@ -32,30 +32,23 @@ TYPE_MASK_POS_VEL = (
 
 
 class CommandSender:
-    """Manages per-heli outbound MAVLink connections via UDP.
+    """Sends MAVLink commands to helis via the shared TCP 5760 connection.
 
-    Each heli's mavlink-hub endpoint is at UDP port 14559 + heli_id.
-    Connections are lazy-created and reused for the session lifetime.
+    All commands go through mavlink-hub's TCP port, which routes by target
+    sysid. This is more reliable than per-heli UDP (which had routing issues
+    with Server-mode endpoints).
     """
 
     def __init__(self, source_system: int = 250, source_component: int = 190):
         self._source_system = source_system
         self._source_component = source_component
-        self._connections: dict[int, mavutil.mavlink_connection] = {}
+        self._hub_client = None
 
-    def _get_conn(self, heli_id: int):
-        """Get or create a UDP connection for a heli."""
-        if heli_id not in self._connections:
-            port = 14559 + heli_id
-            conn = mavutil.mavlink_connection(
-                f"udpout:127.0.0.1:{port}",
-                source_system=self._source_system,
-                source_component=self._source_component,
-            )
-            self._connections[heli_id] = conn
-            log.info("Created UDP connection for Heli%02d → 127.0.0.1:%d",
-                     heli_id, port)
-        return self._connections[heli_id]
+    def _get_conn(self, heli_id: int = 0):
+        """Get the shared TCP connection via hub_client."""
+        if self._hub_client and self._hub_client._conn:
+            return self._hub_client._conn
+        raise RuntimeError("No hub_client connection available")
 
     def send_position_target(self, heli_id: int,
                               pos_n: float, pos_e: float, pos_d: float,
@@ -210,17 +203,5 @@ class CommandSender:
         return result
 
     def close_all(self):
-        """Close all connections."""
-        for heli_id, conn in self._connections.items():
-            try:
-                conn.close()
-            except Exception:
-                pass
-        self._connections.clear()
-        if hasattr(self, "_tcp_conn") and self._tcp_conn:
-            try:
-                self._tcp_conn.close()
-            except Exception:
-                pass
-            self._tcp_conn = None
-        log.info("All command connections closed")
+        """Cleanup (hub_client connection is managed by hub_client)."""
+        log.info("CommandSender closed")
