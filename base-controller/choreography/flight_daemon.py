@@ -35,8 +35,8 @@ TICK_INTERVAL = 1.0 / TICK_HZ
 SPOOL_TIME_S = 8.0              # TradiHeli rotor spool-up after arm
 TAKEOFF_DELAY_S = 3.0           # Between sequential takeoffs
 HOVER_ALT_M = 5.0               # Default takeoff hover altitude
-ARM_TIMEOUT_S = 5.0             # Wait for arm confirmation
-MODE_TIMEOUT_S = 3.0            # Wait for mode change confirmation
+ARM_TIMEOUT_S = 15.0            # Wait for arm confirmation (helis can be slow)
+MODE_TIMEOUT_S = 5.0            # Wait for mode change confirmation
 
 # Staging
 STAGING_ARRIVAL_TOL = 1.0       # Meters — close enough to start position
@@ -736,22 +736,36 @@ class FlightDaemon:
     # ================================================================
 
     async def _wait_for_armed(self, heli_id: int, armed: bool, timeout: float) -> bool:
-        """Wait for arm/disarm confirmation from telemetry."""
+        """Wait for arm/disarm confirmation from telemetry. Retries command every 3s."""
         deadline = time.monotonic() + timeout
+        last_send = time.monotonic()
         while time.monotonic() < deadline:
             v = self._tracker.get(10 + heli_id) if self._tracker else None
             if v and v.get("armed") == armed:
                 return True
+            # Retry ARM command every 3s
+            if time.monotonic() - last_send > 3.0:
+                self._sender.send_arm(heli_id, arm=armed)
+                log.info("Retrying %s for Heli%02d", "ARM" if armed else "DISARM", heli_id)
+                last_send = time.monotonic()
             await asyncio.sleep(0.2)
         return False
 
     async def _wait_for_mode(self, heli_id: int, mode_name: str, timeout: float) -> bool:
-        """Wait for flight mode confirmation from telemetry."""
+        """Wait for flight mode confirmation from telemetry. Retries command every 2s."""
+        mode_map = {"GUIDED": MODE_GUIDED, "STABILIZE": 0, "BRAKE": MODE_BRAKE, "RTL": MODE_RTL}
+        mode_id = mode_map.get(mode_name)
         deadline = time.monotonic() + timeout
+        last_send = time.monotonic()
         while time.monotonic() < deadline:
             v = self._tracker.get(10 + heli_id) if self._tracker else None
             if v and v.get("flight_mode") == mode_name:
                 return True
+            # Retry mode command every 2s
+            if mode_id is not None and time.monotonic() - last_send > 2.0:
+                self._sender.send_set_mode(heli_id, mode_id)
+                log.info("Retrying SET_MODE %s for Heli%02d", mode_name, heli_id)
+                last_send = time.monotonic()
             await asyncio.sleep(0.2)
         return False
 
