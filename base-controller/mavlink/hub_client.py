@@ -94,22 +94,42 @@ class HubClient:
             null_count = 0
             msg_type = msg.get_type()
 
-            # Request firmware version from new vehicles
+            # Request data streams + firmware version from new vehicles
             if msg_type == "HEARTBEAT":
                 src = msg.get_srcSystem()
                 if src < 250 and src not in self._version_requested:
                     self._version_requested.add(src)
                     try:
-                        self._conn.mav.command_long_send(
+                        # Request all data streams at 4Hz
+                        # MAV_DATA_STREAM_ALL = 0
+                        self._conn.mav.request_data_stream_send(
                             src, 1,  # target system, component
-                            mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
-                            0,   # confirmation
-                            148, # param1: AUTOPILOT_VERSION msg id
-                            0, 0, 0, 0, 0, 0,
+                            0,       # stream_id: ALL
+                            4,       # rate_hz
+                            1,       # start (1=start, 0=stop)
                         )
-                        log.info("Requested AUTOPILOT_VERSION from sysid %d", src)
-                    except Exception:
-                        pass
+                        # Also request specific streams at higher rates
+                        for stream_id, rate in [
+                            (1, 2),   # RAW_SENSORS (2Hz)
+                            (2, 2),   # EXTENDED_STATUS (2Hz)
+                            (3, 2),   # RC_CHANNELS (2Hz)
+                            (6, 4),   # POSITION (4Hz — GPS_RAW_INT, GLOBAL_POSITION_INT)
+                            (10, 4),  # EXTRA1 (4Hz — ATTITUDE)
+                            (11, 4),  # EXTRA2 (4Hz — VFR_HUD)
+                            (12, 2),  # EXTRA3 (2Hz — BATTERY_STATUS)
+                        ]:
+                            self._conn.mav.request_data_stream_send(
+                                src, 1, stream_id, rate, 1)
+                        log.info("Requested data streams from sysid %d", src)
+
+                        # Request AUTOPILOT_VERSION
+                        self._conn.mav.command_long_send(
+                            src, 1,
+                            mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
+                            0, 148, 0, 0, 0, 0, 0, 0,
+                        )
+                    except Exception as e:
+                        log.warning("Failed to request streams from sysid %d: %s", src, e)
 
             # Handle PARAM_VALUE for pending param requests
             if msg_type == "PARAM_VALUE":
