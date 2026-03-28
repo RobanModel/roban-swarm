@@ -8,21 +8,27 @@
 </head>
 <body>
     <header>
-        <h1>Roban Swarm</h1>
+        <h1 data-i18n="title">Roban Swarm</h1>
         <div class="header-badges">
+            <select id="lang-select" class="lang-select" onchange="I18N.setLang(this.value)">
+                <option value="en">EN</option>
+                <option value="de">DE</option>
+                <option value="es">ES</option>
+                <option value="zh">中文</option>
+            </select>
             <div id="mode-badge" class="badge badge-config">CONFIG</div>
             <button id="btn-sim-toggle" class="badge badge-real" onclick="toggleSimMode()">REAL</button>
         </div>
     </header>
-    <div id="sim-banner" class="sim-banner" style="display:none">
+    <div id="sim-banner" class="sim-banner" style="display:none" data-i18n="sim_banner">
         SIMULATION MODE — Targeting sim helis (sysid +100)
     </div>
 
     <nav>
-        <button class="nav-btn active" data-page="dashboard">Dashboard</button>
-        <button class="nav-btn" data-page="fleet">Fleet</button>
-        <button class="nav-btn" data-page="show">Show</button>
-        <button class="nav-btn" data-page="config">Config</button>
+        <button class="nav-btn active" data-page="dashboard" data-i18n="nav_dashboard">Dashboard</button>
+        <button class="nav-btn" data-page="fleet" data-i18n="nav_fleet">Fleet</button>
+        <button class="nav-btn" data-page="show" data-i18n="nav_show">Show</button>
+        <button class="nav-btn" data-page="config" data-i18n="nav_config">Config</button>
     </nav>
 
     <main>
@@ -30,7 +36,7 @@
         <section id="page-dashboard" class="page active">
             <div id="base-status" class="base-status-card">
                 <div class="base-header">
-                    <span class="base-title">Base Station</span>
+                    <span class="base-title" data-i18n="base_station">Base Station</span>
                     <span id="base-ntrip-badge" class="badge badge-offline">NTRIP</span>
                 </div>
                 <div class="base-stats">
@@ -39,7 +45,7 @@
                     <span class="label">Total</span><span class="value" id="base-rtcm-total">-</span>
                 </div>
             </div>
-            <h2>Fleet Overview <button class="btn-small" onclick="Dashboard.refreshAll()">⟳ Refresh</button></h2>
+            <h2><span data-i18n="fleet_overview">Fleet Overview</span> <button class="btn-small" onclick="Dashboard.refreshAll()">⟳ <span data-i18n="refresh">Refresh</span></button></h2>
             <div id="fleet-grid" class="fleet-grid">
                 <p class="placeholder">No vehicles registered. Go to Fleet to add helis.</p>
             </div>
@@ -68,10 +74,10 @@
 
         <!-- Show control page -->
         <section id="page-show" class="page">
-            <h2>Show Control</h2>
+            <h2 data-i18n="show_control">Show Control</h2>
             <div class="show-upload">
                 <input type="file" id="show-file-input" accept=".json">
-                <button id="btn-upload-show" class="btn-primary">Upload Show</button>
+                <button id="btn-upload-show" class="btn-primary" data-i18n="btn_upload">Upload Show</button>
                 <span id="show-file-name"></span>
             </div>
             <div id="show-info" class="show-info" style="display:none">
@@ -93,35 +99,35 @@
                 <div id="lineup-detail"></div>
             </div>
             <div id="show-readiness" style="display:none">
-                <h3>Pre-flight Checks</h3>
+                <h3 data-i18n="preflight_checks">Pre-flight Checks</h3>
                 <div id="readiness-list"></div>
             </div>
             <div class="show-two-col">
                 <div class="show-col-left">
                     <div id="heli-phase-cards" class="heli-phase-grid"></div>
                     <div class="show-controls">
-                        <button id="btn-lineup" class="btn-secondary" disabled>Capture Lineup</button>
-                        <button id="btn-preflight" class="btn-secondary" disabled>Preflight</button>
-                        <button id="btn-fix-preflight" class="btn-secondary" style="display:none">Fix Issues</button>
-                        <button id="btn-launch" class="btn-op" disabled>Launch</button>
-                        <button id="btn-go" class="btn-op" disabled>GO</button>
-                        <button id="btn-pause" class="btn-secondary" disabled>Pause</button>
-                        <button id="btn-resume" class="btn-secondary" disabled>Resume</button>
-                        <button id="btn-land" class="btn-secondary" disabled>Land</button>
+                        <button id="btn-lineup" class="btn-secondary" disabled data-i18n="btn_lineup">Capture Lineup</button>
+                        <button id="btn-preflight" class="btn-secondary" disabled data-i18n="btn_preflight">Preflight</button>
+                        <button id="btn-fix-preflight" class="btn-secondary" style="display:none" data-i18n="btn_fix">Fix Issues</button>
+                        <button id="btn-launch" class="btn-op" disabled data-i18n="btn_launch">Launch</button>
+                        <button id="btn-go" class="btn-op" disabled data-i18n="btn_go">GO</button>
+                        <button id="btn-pause" class="btn-secondary" disabled data-i18n="btn_pause">Pause</button>
+                        <button id="btn-resume" class="btn-secondary" disabled data-i18n="btn_resume">Resume</button>
+                        <button id="btn-land" class="btn-secondary" disabled data-i18n="btn_land">Land</button>
                     </div>
                     <div class="show-controls emergency-controls">
-                        <button id="btn-rtl" class="btn-danger">RTL ALL</button>
-                        <button id="btn-show-stop" class="btn-danger">STOP</button>
+                        <button id="btn-rtl" class="btn-danger" data-i18n="btn_rtl">RTL ALL</button>
+                        <button id="btn-show-stop" class="btn-danger" data-i18n="btn_stop">STOP</button>
                     </div>
                     <div id="show-log" class="show-log">
-                        <h3>Event Log</h3>
+                        <h3 data-i18n="event_log">Event Log</h3>
                         <div id="show-log-entries"></div>
                     </div>
                 </div>
                 <div class="show-col-right">
-                    <h3>Telemetry</h3>
+                    <h3 data-i18n="telemetry">Telemetry</h3>
                     <div id="heli-telemetry-list" class="telem-list"></div>
-                    <h3>2D Map</h3>
+                    <h3 data-i18n="map_2d">2D Map</h3>
                     <canvas id="show-map" width="400" height="400"></canvas>
                 </div>
             </div>
@@ -165,6 +171,7 @@
         <span id="uptime"></span>
     </footer>
 
+    <script src="/js/lang.js"></script>
     <script src="/js/ws.js"></script>
     <script src="/js/dashboard.js"></script>
     <script src="/js/fleet.js"></script>

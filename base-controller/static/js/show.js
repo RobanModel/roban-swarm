@@ -108,7 +108,7 @@ const Show = (() => {
     });
 
     btnLaunch.addEventListener('click', async () => {
-        if (!confirm('Launch all helis? This will ARM and TAKE OFF.')) return;
+        if (!confirm(I18N.t('confirm_launch'))) return;
         appendLog('info', 'LAUNCH sequence starting...');
         const r = await fetch('/api/show/launch', { method: 'POST' });
         if (!r.ok) { const d = await r.json(); appendLog('danger', `Launch failed: ${d.detail}`); }
@@ -130,19 +130,19 @@ const Show = (() => {
     });
 
     btnLand.addEventListener('click', async () => {
-        if (!confirm('Start landing sequence?')) return;
+        if (!confirm(I18N.t('confirm_land'))) return;
         await fetch('/api/show/land', { method: 'POST' });
         appendLog('info', 'Landing sequence started');
     });
 
     btnRtl.addEventListener('click', async () => {
-        if (!confirm('EMERGENCY RTL — All helis return to home. Proceed?')) return;
+        if (!confirm(I18N.t('confirm_rtl'))) return;
         await fetch('/api/show/rtl', { method: 'POST' });
         appendLog('danger', 'RTL ALL — ArduPilot in control');
     });
 
     btnStop.addEventListener('click', async () => {
-        if (!confirm('EMERGENCY STOP — BRAKE all helis?')) return;
+        if (!confirm(I18N.t('confirm_stop'))) return;
         await fetch('/api/show/stop', { method: 'POST' });
         appendLog('danger', 'EMERGENCY STOP — all helis braking');
     });
