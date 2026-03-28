@@ -59,3 +59,36 @@ async function updateHealth() {
 }
 setInterval(updateHealth, 10000);
 updateHealth();
+
+/* Sim mode toggle */
+let _simMode = false;
+
+async function toggleSimMode() {
+    const endpoint = _simMode ? '/api/mode/real' : '/api/mode/sim';
+    try {
+        const r = await fetch(endpoint, { method: 'POST' });
+        const d = await r.json();
+        _simMode = d.sim_mode;
+        updateSimBadge();
+    } catch (e) { alert('Failed to toggle sim mode: ' + e.message); }
+}
+
+function updateSimBadge() {
+    const btn = document.getElementById('btn-sim-toggle');
+    const banner = document.getElementById('sim-banner');
+    if (_simMode) {
+        btn.textContent = 'SIM';
+        btn.className = 'badge badge-sim';
+        banner.style.display = '';
+    } else {
+        btn.textContent = 'REAL';
+        btn.className = 'badge badge-real';
+        banner.style.display = 'none';
+    }
+}
+
+// Check initial sim mode
+fetch('/api/mode').then(r => r.json()).then(d => {
+    _simMode = d.sim_mode || false;
+    updateSimBadge();
+}).catch(() => {});

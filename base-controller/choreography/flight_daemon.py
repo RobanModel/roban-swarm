@@ -24,6 +24,7 @@ from typing import Callable, Awaitable
 from .show_format import ShowFile, HeliTrack, Vec3, LineupData, HeliPhase
 from .safety_monitor import SafetyMonitor
 from mavlink.command_sender import CommandSender, MODE_BRAKE, MODE_GUIDED, MODE_RTL
+from api._state import get_sysid_offset
 
 log = logging.getLogger("roban.flight")
 
@@ -103,6 +104,10 @@ class FlightDaemon:
 
     # --- Properties ---
 
+    def _sysid(self, heli_id: int) -> int:
+        """Map heli_id to MAVLink sysid, respecting sim mode offset."""
+        return 10 + heli_id + get_sysid_offset()
+
     @property
     def state(self) -> DaemonState:
         return self._state
@@ -168,7 +173,7 @@ class FlightDaemon:
         positions = {}  # heli_id → (lat, lon, alt)
 
         for track in self._show.tracks:
-            sysid = 10 + track.heli_id
+            sysid = self._sysid(track.heli_id)
             v = self._tracker.get(sysid)
             if v is None:
                 errors.append(f"Heli{track.heli_id:02d}: not seen")
@@ -243,7 +248,7 @@ class FlightDaemon:
         heli_ids = sorted(self._show.get_heli_ids())
 
         for idx, heli_id in enumerate(heli_ids):
-            sysid = 10 + heli_id
+            sysid = self._sysid(heli_id)
             v = self._tracker.get(sysid) if self._tracker else None
             issues = []
             fixes = []
@@ -269,9 +274,10 @@ class FlightDaemon:
             if batt is not None and batt < MIN_BATTERY_PCT:
                 issues.append(f"Battery {batt}% (need ≥{MIN_BATTERY_PCT}%)")
 
-            # Check RTL_ALT — must be staggered
+            # Check RTL_ALT — must be staggered (skip in sim mode)
+            from api._state import is_sim_mode
             expected_rtl_alt = RTL_BASE_ALT_CM + (idx * RTL_STEP_CM)
-            if self._sender:
+            if self._sender and not is_sim_mode():
                 actual_rtl = await asyncio.to_thread(
                     self._sender.read_param, heli_id, "RTL_ALT"
                 )
@@ -417,7 +423,7 @@ class FlightDaemon:
                 await self._send_safe(heli_id, home.n, home.e, target_d)
 
                 # Check altitude from telemetry
-                v = self._tracker.get(10 + heli_id) if self._tracker else None
+                v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
                 if v and v.get("relative_alt_m", 0) >= (HOVER_ALT_M - 1.0):
                     log.info("Heli%02d at hover altitude", heli_id)
                     break
@@ -450,7 +456,7 @@ class FlightDaemon:
                 t = targets[heli_id]
                 await self._send_safe(heli_id, t.n, t.e, t.d)
 
-                v = self._tracker.get(10 + heli_id) if self._tracker else None
+                v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
                 if v:
                     cn, ce, cd = self._gps_to_ned(v["lat"], v["lon"], v.get("alt_m", 0))
                     dist = math.sqrt((cn - t.n)**2 + (ce - t.e)**2 + (cd - t.d)**2)
@@ -589,7 +595,7 @@ class FlightDaemon:
                     home = self._lineup.home_positions[heli_id]
                     await self._send_safe(heli_id, home.n, home.e, return_alts[heli_id])
 
-                    v = self._tracker.get(10 + heli_id) if self._tracker else None
+                    v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
                     if v:
                         cn, ce, _ = self._gps_to_ned(v["lat"], v["lon"], v.get("alt_m", 0))
                         horiz = math.sqrt((cn - home.n)**2 + (ce - home.e)**2)
@@ -630,7 +636,7 @@ class FlightDaemon:
                     await self._send_safe(heli_id, home.n, home.e, target_d)
 
                     # Check if landed
-                    v = self._tracker.get(10 + heli_id) if self._tracker else None
+                    v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
                     if v:
                         rel_alt = v.get("relative_alt_m", 10)
                         if rel_alt < LANDING_DETECT_ALT_M:
@@ -740,7 +746,7 @@ class FlightDaemon:
         deadline = time.monotonic() + timeout
         last_send = time.monotonic()
         while time.monotonic() < deadline:
-            v = self._tracker.get(10 + heli_id) if self._tracker else None
+            v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
             if v and v.get("armed") == armed:
                 return True
             # Retry ARM command every 3s
@@ -758,7 +764,7 @@ class FlightDaemon:
         deadline = time.monotonic() + timeout
         last_send = time.monotonic()
         while time.monotonic() < deadline:
-            v = self._tracker.get(10 + heli_id) if self._tracker else None
+            v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
             if v and v.get("flight_mode") == mode_name:
                 return True
             # Retry mode command every 2s

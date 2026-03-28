@@ -7,6 +7,7 @@ are routed to the correct vehicle only.
 
 import logging
 from pymavlink import mavutil
+from api._state import get_sysid_offset
 
 log = logging.getLogger("roban.command")
 
@@ -60,7 +61,7 @@ class CommandSender:
         (ArduPilot auto-faces direction of travel).
         """
         conn = self._get_conn(heli_id)
-        target_system = 10 + heli_id
+        target_system = 10 + heli_id + get_sysid_offset()
         conn.mav.set_position_target_local_ned_send(
             0,                                  # time_boot_ms (0 = autopilot time)
             target_system, 1,                   # target system, component
@@ -75,7 +76,7 @@ class CommandSender:
     def send_set_mode(self, heli_id: int, mode_id: int):
         """Send SET_MODE to switch flight mode (e.g., GUIDED=4, BRAKE=17)."""
         conn = self._get_conn(heli_id)
-        target_system = 10 + heli_id
+        target_system = 10 + heli_id + get_sysid_offset()
         conn.mav.set_mode_send(
             target_system,
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
@@ -86,7 +87,7 @@ class CommandSender:
     def send_arm(self, heli_id: int, arm: bool = True):
         """Send ARM/DISARM command."""
         conn = self._get_conn(heli_id)
-        target_system = 10 + heli_id
+        target_system = 10 + heli_id + get_sysid_offset()
         conn.mav.command_long_send(
             target_system, 1,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
@@ -125,7 +126,7 @@ class CommandSender:
             return None
 
         hub = self._hub_client
-        target_system = 10 + heli_id
+        target_system = 10 + heli_id + get_sysid_offset()
 
         # Register that we're waiting for this param
         key = (target_system, param_name)
@@ -163,7 +164,7 @@ class CommandSender:
             return False
 
         hub = self._hub_client
-        target_system = 10 + heli_id
+        target_system = 10 + heli_id + get_sysid_offset()
 
         key = (target_system, param_name)
         hub.pending_params[key] = None

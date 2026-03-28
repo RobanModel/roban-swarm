@@ -27,7 +27,7 @@ class VehicleState:
 
     __slots__ = (
         "sysid", "online", "last_heartbeat",
-        "armed", "flight_mode", "flight_mode_num",
+        "armed", "flight_mode", "flight_mode_num", "fw_version",
         "fix_type", "lat", "lon", "alt_m", "satellites", "hdop",
         "battery_mv", "battery_pct",
         "roll_deg", "pitch_deg", "yaw_deg",
@@ -42,6 +42,7 @@ class VehicleState:
         self.armed = False
         self.flight_mode = "UNKNOWN"
         self.flight_mode_num = 0
+        self.fw_version = None
         self.fix_type = 0
         self.lat = 0.0
         self.lon = 0.0
@@ -65,6 +66,7 @@ class VehicleState:
             "online": self.online,
             "armed": self.armed,
             "flight_mode": self.flight_mode,
+            "fw_version": self.fw_version,
             "gps_fix": self.fix_type,
             "lat": self.lat,
             "lon": self.lon,
@@ -180,6 +182,9 @@ class VehicleTracker:
                 v.battery_pct = fields["battery_pct"]
             if fields["battery_mv"] is not None:
                 v.battery_mv = fields["battery_mv"]
+
+        elif msg_type == "AUTOPILOT_VERSION":
+            v.fw_version = fields["fw_version"]
 
         # Broadcast update
         if self._on_update:

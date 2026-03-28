@@ -9,8 +9,14 @@
 <body>
     <header>
         <h1>Roban Swarm</h1>
-        <div id="mode-badge" class="badge badge-config">CONFIG</div>
+        <div class="header-badges">
+            <div id="mode-badge" class="badge badge-config">CONFIG</div>
+            <button id="btn-sim-toggle" class="badge badge-real" onclick="toggleSimMode()">REAL</button>
+        </div>
     </header>
+    <div id="sim-banner" class="sim-banner" style="display:none">
+        SIMULATION MODE — Targeting sim helis (sysid +100)
+    </div>
 
     <nav>
         <button class="nav-btn active" data-page="dashboard">Dashboard</button>

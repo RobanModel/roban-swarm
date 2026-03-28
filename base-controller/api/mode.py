@@ -1,10 +1,15 @@
-"""Mode switching API — Config vs Production."""
+"""Mode switching API — Config vs Production, Real vs Sim."""
 
+import logging
+import subprocess
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
+from ._state import set_sim_mode, is_sim_mode
+
 router = APIRouter(tags=["mode"])
+log = logging.getLogger("roban.api.mode")
 
 # In-memory mode state (single base station, no persistence needed)
 _current_mode = "config"
@@ -18,11 +23,16 @@ class ConfigRequest(BaseModel):
 class ModeResponse(BaseModel):
     mode: str
     selected_heli: Optional[int] = None
+    sim_mode: bool = False
 
 
-@router.get("/mode", response_model=ModeResponse)
+@router.get("/mode")
 async def get_mode():
-    return ModeResponse(mode=_current_mode, selected_heli=_selected_heli)
+    return {
+        "mode": _current_mode,
+        "selected_heli": _selected_heli,
+        "sim_mode": is_sim_mode(),
+    }
 
 
 @router.post("/mode/config", response_model=ModeResponse)
@@ -40,4 +50,34 @@ async def set_production_mode():
     _current_mode = "production"
     _selected_heli = None
     # TODO: stop GCS forwarding, enable swarm controller
-    return ModeResponse(mode=_current_mode, selected_heli=_selected_heli)
+    return {"mode": _current_mode, "selected_heli": _selected_heli, "sim_mode": is_sim_mode()}
+
+
+@router.post("/mode/sim")
+async def enable_sim_mode():
+    """Switch to simulation mode — flight daemon targets sim sysids (+100)."""
+    set_sim_mode(True)
+    # Try to start the simulator
+    try:
+        subprocess.Popen(
+            ["/opt/roban-swarm/venv/bin/python3", "-u", "/opt/roban-swarm/mavlink-sim.py", "--helis", "2"],
+            stdout=open("/tmp/mavlink-sim.log", "w"),
+            stderr=subprocess.STDOUT,
+        )
+        log.info("SIM mode enabled — simulator started")
+    except Exception as e:
+        log.warning("SIM mode enabled but simulator failed to start: %s", e)
+    return {"mode": _current_mode, "sim_mode": True, "detail": "Sim mode active — sysid offset +100"}
+
+
+@router.post("/mode/real")
+async def disable_sim_mode():
+    """Switch to real mode — flight daemon targets real sysids."""
+    set_sim_mode(False)
+    # Stop the simulator
+    try:
+        subprocess.run(["pkill", "-f", "mavlink-sim.py"], capture_output=True, timeout=5)
+        log.info("SIM mode disabled — simulator stopped")
+    except Exception:
+        pass
+    return {"mode": _current_mode, "sim_mode": False, "detail": "Real mode active"}

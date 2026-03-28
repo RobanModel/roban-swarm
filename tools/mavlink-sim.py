@@ -34,7 +34,7 @@ SYSID_OFFSET = 100        # sim sysid = 10 + heli_id + 100
 HOME_LAT = 23.1611        # degrees
 HOME_LON = 113.8822       # degrees
 HOME_ALT = 45.0           # meters AMSL
-HELI_SPACING_M = 3.0      # meters between helis at startup
+HELI_SPACING_M = 5.0      # meters between helis at startup (must be > 3m safety min)
 MAX_SPEED = 3.0            # m/s max simulated movement speed
 TICK_HZ = 50               # internal sim rate
 
@@ -254,30 +254,36 @@ class MavlinkSim:
         self.hub_addr = hub_addr
         self.num_helis = num_helis
         self.helis: dict[int, SimHeli] = {}
-        self.conn = None
+        self._conns: list = []
         self.running = False
 
     def start(self):
-        print(f"Connecting to mavlink-hub at {self.hub_addr}...")
-        self.conn = mavutil.mavlink_connection(
-            f"tcp:{self.hub_addr}",
-            source_system=111,  # Will be overridden per-message
-            source_component=1,
-        )
-        print("Connected.")
+        # Each sim heli gets its own TCP connection to mavlink-hub.
+        # mavlink-routerd supports multiple TCP clients on port 5760
+        # and routes by target_system in each message.
+        print(f"Connecting {self.num_helis} helis to mavlink-hub TCP {self.hub_addr}...")
 
-        # Create helis
         for i in range(1, self.num_helis + 1):
-            heli = SimHeli(i, self.conn)
+            sysid = 10 + i + SYSID_OFFSET
+            conn = mavutil.mavlink_connection(
+                f"tcp:{self.hub_addr}",
+                source_system=sysid,
+                source_component=1,
+            )
+            heli = SimHeli(i, conn)
             self.helis[heli.sysid] = heli
+            self._conns.append(conn)
             print(f"  Heli{i:02d}: sysid={heli.sysid}, "
-                  f"pos=({heli.lat:.7f}, {heli.lon:.7f})")
+                  f"pos=({heli.lat:.7f}, {heli.lon:.7f}) — TCP connected")
+            time.sleep(0.5)  # Stagger connections
 
         self.running = True
 
-        # Start receive thread
-        rx_thread = threading.Thread(target=self._receive_loop, daemon=True)
-        rx_thread.start()
+        # Start receive thread per connection
+        for conn in self._conns:
+            rx_thread = threading.Thread(
+                target=self._receive_loop, args=(conn,), daemon=True)
+            rx_thread.start()
 
         # Main sim loop
         self._sim_loop()
@@ -293,9 +299,7 @@ class MavlinkSim:
             for heli in self.helis.values():
                 heli.update(dt)
 
-                # Set source system for this heli's messages
-                self.conn.mav.srcSystem = heli.sysid
-
+                # Each heli has its own connection (srcSystem already set)
                 # Heartbeat at 1Hz
                 if tick % TICK_HZ == 0:
                     heli.send_heartbeat()
@@ -319,11 +323,13 @@ class MavlinkSim:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _receive_loop(self):
+    def _receive_loop(self, conn=None):
         """Receive and handle incoming MAVLink commands."""
+        if conn is None:
+            return
         while self.running:
             try:
-                msg = self.conn.recv_match(blocking=True, timeout=1.0)
+                msg = conn.recv_match(blocking=True, timeout=1.0)
                 if msg is None:
                     continue
 
@@ -348,14 +354,14 @@ class MavlinkSim:
                         heli.arm(do_arm)
                         print(f"  Heli{heli.heli_id}: {'ARMED' if do_arm else 'DISARMED'}")
                         # Send ACK
-                        self.conn.mav.srcSystem = heli.sysid
-                        self.conn.mav.command_ack_send(
+                        conn.mav.srcSystem = heli.sysid
+                        conn.mav.command_ack_send(
                             msg.command, apm.MAV_RESULT_ACCEPTED)
 
                     elif msg.command == apm.MAV_CMD_REQUEST_MESSAGE:
                         msg_id = int(msg.param1)
                         if msg_id == 148:  # AUTOPILOT_VERSION
-                            self.conn.mav.srcSystem = heli.sysid
+                            conn.mav.srcSystem = heli.sysid
                             heli.send_autopilot_version()
 
                 elif msg_type == "SET_POSITION_TARGET_LOCAL_NED":
@@ -378,7 +384,7 @@ class MavlinkSim:
                     }
                     val = params.get(pname, 0.0)
                     self.conn.mav.srcSystem = heli.sysid
-                    self.conn.mav.param_value_send(
+                    conn.mav.param_value_send(
                         pname.encode().ljust(16, b'\x00'),
                         float(val), 9, 0, 0,
                     )
@@ -388,7 +394,7 @@ class MavlinkSim:
                         else msg.param_id.decode().rstrip('\x00')
                     # ACK with the set value
                     self.conn.mav.srcSystem = heli.sysid
-                    self.conn.mav.param_value_send(
+                    conn.mav.param_value_send(
                         msg.param_id if isinstance(msg.param_id, bytes)
                         else msg.param_id.encode().ljust(16, b'\x00'),
                         msg.param_value, msg.param_type, 0, 0,
@@ -405,8 +411,11 @@ class MavlinkSim:
 
     def stop(self):
         self.running = False
-        if self.conn:
-            self.conn.close()
+        for conn in self._conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def main():

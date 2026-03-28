@@ -305,3 +305,9 @@ footer {
 /* Emergency controls */
 .emergency-controls { margin-top: 8px; }
 .emergency-controls .btn-danger { font-size: 1.1rem; padding: 8px 20px; }
+
+/* Sim mode */
+.header-badges { display: flex; gap: 8px; align-items: center; }
+.badge-sim { background: #ff9800; color: #000; padding: 4px 12px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; cursor: pointer; border: none; }
+.badge-real { background: var(--green); color: #000; padding: 4px 12px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; cursor: pointer; border: none; }
+.sim-banner { background: #ff9800; color: #000; text-align: center; padding: 6px; font-weight: bold; font-size: 0.9rem; letter-spacing: 1px; }
