@@ -177,6 +177,17 @@ const Show = (() => {
             appendLog('danger', `SAFETY: Heli${String(msg.heli_id).padStart(2,'0')} — ${msg.detail}`);
         } else if (msg.type === 'show_error') {
             appendLog('danger', `ERROR: ${msg.message}`);
+        } else if (msg.type === 'show_event') {
+            const eventMsgs = {
+                show_complete: {en: 'Show complete — auto-returning', de: 'Show abgeschlossen — automatische Rückkehr', es: 'Show completo — retorno automático', zh: '表演完成 — 自动返航'},
+                returning: {en: 'Returning to home positions', de: 'Rückkehr zu Startpositionen', es: 'Regresando a posiciones de inicio', zh: '返回起始位置'},
+                descending: {en: 'All helis descending — parallel landing', de: 'Alle Helis im Sinkflug — parallele Landung', es: 'Todos los helis descendiendo — aterrizaje paralelo', zh: '所有直升机下降 — 平行着陆'},
+                all_landed: {en: 'All helis landed — operations complete', de: 'Alle Helis gelandet — Betrieb abgeschlossen', es: 'Todos los helis aterrizados — operaciones completas', zh: '所有直升机已着陆 — 操作完成'},
+            };
+            const msgs = eventMsgs[msg.event];
+            const text = msgs ? (msgs[I18N.getLang()] || msgs.en) : msg.event;
+            const level = msg.event === 'all_landed' ? 'ok' : 'info';
+            appendLog(level, text);
         } else if (msg.type === 'rtl_triggered') {
             appendLog('danger', `RTL triggered for helis: ${msg.heli_ids.join(', ')}`);
         }
@@ -188,7 +199,7 @@ const Show = (() => {
 
     function updateState(msg) {
         currentState = msg.state;
-        showState.textContent = msg.state.toUpperCase().replace(/_/g, ' ');
+        showState.textContent = I18N.t('state_' + msg.state) || msg.state.toUpperCase().replace(/_/g, ' ');
         showState.className = `state-${msg.state}`;
 
         if (msg.duration_s > 0 && msg.elapsed_s >= 0) {
@@ -258,7 +269,8 @@ const Show = (() => {
         if (!phases || !Object.keys(phases).length) return;
         let html = '';
         for (const [hid, phase] of Object.entries(phases)) {
-            const label = phase.toUpperCase().replace(/_/g, ' ');
+            // Translate phase label via i18n
+            const label = I18N.t('state_' + phase) || phase.toUpperCase().replace(/_/g, ' ');
             const cls = phaseClass(phase);
             html += `<div class="heli-phase-card ${cls}">
                 <strong>Heli${String(hid).padStart(2,'0')}</strong>

@@ -379,10 +379,10 @@ class FlightDaemon:
             log.info("Spooling up (%.0fs)...", SPOOL_TIME_S)
             await asyncio.sleep(SPOOL_TIME_S)
 
-            # --- Phase 3: TAKEOFF ---
+            # --- Phase 3: TAKEOFF (parallel) ---
             self._state = DaemonState.TAKING_OFF
             await self._emit_status()
-            await self._sequential_takeoff(heli_ids)
+            await self._parallel_takeoff(heli_ids)
 
             # --- Phase 4: STAGE ---
             self._state = DaemonState.STAGING
@@ -404,38 +404,38 @@ class FlightDaemon:
             await self._emit_event({"type": "show_error", "message": str(e)})
             await self._emit_status()
 
-    async def _sequential_takeoff(self, heli_ids: list[int]):
-        """Sequential takeoff to hover altitude above home positions."""
+    async def _parallel_takeoff(self, heli_ids: list[int]):
+        """Parallel takeoff — all helis climb simultaneously.
+
+        All helis rise to hover altitude at the same time. We wait until
+        ALL have reached altitude before proceeding to horizontal movement.
+        """
         for heli_id in heli_ids:
-            if self._state != DaemonState.TAKING_OFF:
-                return
             self._heli_phases[heli_id] = HeliPhase.TAKING_OFF
-            await self._emit_phase_progress()
+        await self._emit_phase_progress()
+        log.info("All helis taking off to %.1fm (parallel)", HOVER_ALT_M)
 
-            home = self._lineup.home_positions[heli_id]
-            target_d = -(HOVER_ALT_M)  # NED: negative = up
+        at_altitude = set()
+        deadline = time.monotonic() + 30
 
-            log.info("Heli%02d taking off to %.1fm", heli_id, HOVER_ALT_M)
+        while self._state == DaemonState.TAKING_OFF:
+            for heli_id in heli_ids:
+                home = self._lineup.home_positions[heli_id]
+                await self._send_safe(heli_id, home.n, home.e, -(HOVER_ALT_M))
 
-            # Stream position target until at altitude
-            deadline = time.monotonic() + 30  # 30s max for takeoff
-            while self._state == DaemonState.TAKING_OFF:
-                await self._send_safe(heli_id, home.n, home.e, target_d)
+                if heli_id not in at_altitude:
+                    v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
+                    if v and v.get("relative_alt_m", 0) >= (HOVER_ALT_M - 1.0):
+                        at_altitude.add(heli_id)
+                        log.info("Heli%02d at hover altitude", heli_id)
 
-                # Check altitude from telemetry
-                v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
-                if v and v.get("relative_alt_m", 0) >= (HOVER_ALT_M - 1.0):
-                    log.info("Heli%02d at hover altitude", heli_id)
-                    break
+            if len(at_altitude) == len(heli_ids):
+                log.info("All helis at hover altitude")
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError("Takeoff timeout — not all helis reached altitude")
 
-                if time.monotonic() > deadline:
-                    raise RuntimeError(f"Heli{heli_id:02d}: takeoff timeout")
-
-                await asyncio.sleep(TICK_INTERVAL)
-
-            # Delay before next heli
-            if heli_id != heli_ids[-1]:
-                await asyncio.sleep(TAKEOFF_DELAY_S)
+            await asyncio.sleep(TICK_INTERVAL)
 
     async def _fly_to_start_positions(self, heli_ids: list[int]):
         """Fly all helis from hover to their show start positions."""
@@ -512,6 +512,7 @@ class FlightDaemon:
             if t >= self._show.duration_s:
                 self._state = DaemonState.DONE
                 log.info("Show COMPLETE (%.1fs)", t)
+                await self._emit_event({"type": "show_event", "event": "show_complete"})
                 await self._emit_status()
                 break
 
@@ -570,15 +571,21 @@ class FlightDaemon:
         await self._emit_status()
 
     async def _landing_sequence(self):
-        """Return to home with staggered altitudes, then sequential landing."""
+        """Return to home with staggered altitudes, then parallel landing.
+
+        Phase 1: All helis fly to home positions at staggered altitudes (parallel XY movement)
+        Phase 2: All helis descend simultaneously (staggered altitudes provide safety separation)
+        """
         try:
             if not self._lineup or not self._show:
                 return
 
             heli_ids = sorted(self._show.get_heli_ids())
 
-            # Phase 1: Return to home at staggered altitudes
-            log.info("Landing phase 1: return to home positions")
+            # --- Phase 1: Return to home at staggered altitudes ---
+            log.info("Landing phase 1: returning to home positions")
+            await self._emit_event({"type": "show_event", "event": "returning"})
+
             for idx, heli_id in enumerate(heli_ids):
                 self._heli_phases[heli_id] = HeliPhase.RETURNING
             await self._emit_phase_progress()
@@ -587,88 +594,92 @@ class FlightDaemon:
             for idx, heli_id in enumerate(heli_ids):
                 return_alts[heli_id] = -(RETURN_BASE_ALT_M + idx * RETURN_ALT_STEP_M)
 
-            # Fly all simultaneously to home positions at staggered altitudes
-            deadline = time.monotonic() + 60
+            # Fly all simultaneously — wait for all to arrive
+            arrived = set()
+            deadline = time.monotonic() + 30  # 30s max (was 60)
             while self._state == DaemonState.LANDING:
-                all_home = True
                 for heli_id in heli_ids:
                     home = self._lineup.home_positions[heli_id]
                     await self._send_safe(heli_id, home.n, home.e, return_alts[heli_id])
 
-                    v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
-                    if v:
-                        cn, ce, _ = self._gps_to_ned(v["lat"], v["lon"], v.get("alt_m", 0))
-                        horiz = math.sqrt((cn - home.n)**2 + (ce - home.e)**2)
-                        if horiz > 2.0:
-                            all_home = False
+                    if heli_id not in arrived:
+                        v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
+                        if v:
+                            cn, ce, _ = self._gps_to_ned(v["lat"], v["lon"], v.get("alt_m", 0))
+                            horiz = math.sqrt((cn - home.n)**2 + (ce - home.e)**2)
+                            if horiz <= 2.0:
+                                arrived.add(heli_id)
+                                log.info("Heli%02d over home position", heli_id)
 
-                if all_home:
+                if len(arrived) == len(heli_ids):
+                    log.info("All helis over home — starting descent")
                     break
                 if time.monotonic() > deadline:
-                    log.warning("Return timeout — proceeding to landing")
+                    log.warning("Return timeout — proceeding to descent")
                     break
                 await asyncio.sleep(TICK_INTERVAL)
 
-            # Phase 2: Sequential landing (highest altitude first = last index first)
-            log.info("Landing phase 2: sequential descent")
-            for idx in reversed(range(len(heli_ids))):
-                heli_id = heli_ids[idx]
-                if self._state != DaemonState.LANDING:
-                    break
+            # --- Phase 2: Parallel descent ---
+            log.info("Landing phase 2: parallel descent")
+            await self._emit_event({"type": "show_event", "event": "descending"})
 
+            for heli_id in heli_ids:
                 self._heli_phases[heli_id] = HeliPhase.DESCENDING
-                await self._emit_phase_progress()
+            await self._emit_phase_progress()
 
-                home = self._lineup.home_positions[heli_id]
-                log.info("Heli%02d descending to ground", heli_id)
+            # Track per-heli descent state
+            descent_d = {hid: return_alts[hid] for hid in heli_ids}
+            landed_since = {hid: None for hid in heli_ids}
+            landed_set = set()
+            deadline = time.monotonic() + 45
 
-                # Gradual descent
-                landed_since = None
-                target_d = return_alts[heli_id]
-                deadline = time.monotonic() + 45
+            while self._state == DaemonState.LANDING:
+                for heli_id in heli_ids:
+                    if heli_id in landed_set:
+                        continue
 
-                while self._state == DaemonState.LANDING:
-                    # Slowly lower target altitude
-                    target_d += LANDING_DESCENT_RATE * TICK_INTERVAL
-                    if target_d > 0:
-                        target_d = 0  # Don't command below ground
+                    home = self._lineup.home_positions[heli_id]
 
-                    await self._send_safe(heli_id, home.n, home.e, target_d)
+                    # Lower target altitude
+                    descent_d[heli_id] += LANDING_DESCENT_RATE * TICK_INTERVAL
+                    if descent_d[heli_id] > 0:
+                        descent_d[heli_id] = 0
+
+                    await self._send_safe(heli_id, home.n, home.e, descent_d[heli_id])
 
                     # Check if landed
                     v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
                     if v:
                         rel_alt = v.get("relative_alt_m", 10)
                         if rel_alt < LANDING_DETECT_ALT_M:
-                            if landed_since is None:
-                                landed_since = time.monotonic()
-                            elif time.monotonic() - landed_since >= LANDING_DETECT_TIME_S:
-                                # Landed — disarm
+                            if landed_since[heli_id] is None:
+                                landed_since[heli_id] = time.monotonic()
+                            elif time.monotonic() - landed_since[heli_id] >= LANDING_DETECT_TIME_S:
                                 self._sender.send_disarm(heli_id)
                                 self._heli_phases[heli_id] = HeliPhase.LANDED
+                                landed_set.add(heli_id)
                                 log.info("Heli%02d LANDED and disarmed", heli_id)
                                 await self._emit_phase_progress()
-                                break
                         else:
-                            landed_since = None
+                            landed_since[heli_id] = None
 
-                    if time.monotonic() > deadline:
-                        log.warning("Heli%02d landing timeout — disarming", heli_id)
-                        self._sender.send_disarm(heli_id)
-                        self._heli_phases[heli_id] = HeliPhase.LANDED
-                        break
+                # All landed?
+                if len(landed_set) == len(heli_ids):
+                    break
+                if time.monotonic() > deadline:
+                    # Force disarm any remaining
+                    for heli_id in heli_ids:
+                        if heli_id not in landed_set:
+                            self._sender.send_disarm(heli_id)
+                            self._heli_phases[heli_id] = HeliPhase.LANDED
+                            log.warning("Heli%02d landing timeout — disarmed", heli_id)
+                    break
 
-                    await asyncio.sleep(TICK_INTERVAL)
-
-                # Continue holding other helis at their return altitude
-                for other_id in heli_ids:
-                    if other_id != heli_id and self._heli_phases.get(other_id) != HeliPhase.LANDED:
-                        other_home = self._lineup.home_positions[other_id]
-                        await self._send_safe(other_id, other_home.n, other_home.e,
-                                              return_alts[other_id])
+                await asyncio.sleep(TICK_INTERVAL)
 
             self._state = DaemonState.DONE
-            log.info("All helis landed — show complete")
+            log.info("All helis landed — operations complete")
+            await self._emit_event({"type": "show_event", "event": "all_landed"})
             await self._emit_status()
 
         except asyncio.CancelledError:
