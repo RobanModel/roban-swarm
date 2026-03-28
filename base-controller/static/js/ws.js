@@ -76,15 +76,31 @@ async function toggleSimMode() {
 function updateSimBadge() {
     const btn = document.getElementById('btn-sim-toggle');
     const banner = document.getElementById('sim-banner');
+    const resetBtn = document.getElementById('btn-reset-sim');
     if (_simMode) {
         btn.textContent = 'SIM';
         btn.className = 'badge badge-sim';
         banner.style.display = '';
+        if (resetBtn) resetBtn.style.display = '';
     } else {
         btn.textContent = 'REAL';
         btn.className = 'badge badge-real';
         banner.style.display = 'none';
+        if (resetBtn) resetBtn.style.display = 'none';
     }
+}
+
+async function resetSim() {
+    try {
+        const r = await fetch('/api/mode/sim/reset', { method: 'POST' });
+        const d = await r.json();
+        if (d.ok) {
+            if (typeof Show !== 'undefined' && Show.appendLog)
+                Show.appendLog('info', 'SIM helis reset — back online');
+        } else {
+            alert('Reset failed: ' + (d.error || 'unknown'));
+        }
+    } catch (e) { alert('Reset failed: ' + e.message); }
 }
 
 // Check initial sim mode

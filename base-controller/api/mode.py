@@ -81,3 +81,27 @@ async def disable_sim_mode():
     except Exception:
         pass
     return {"mode": _current_mode, "sim_mode": False, "detail": "Real mode active"}
+
+
+@router.post("/mode/sim/reset")
+async def reset_sim():
+    """Kill and restart the simulator — resets sim helis to ground state."""
+    try:
+        subprocess.run(["pkill", "-f", "mavlink-sim.py"], capture_output=True, timeout=5)
+    except Exception:
+        pass
+
+    import time
+    time.sleep(2)
+
+    try:
+        subprocess.Popen(
+            ["/opt/roban-swarm/venv/bin/python3", "-u", "/opt/roban-swarm/mavlink-sim.py", "--helis", "2"],
+            stdout=open("/tmp/mavlink-sim.log", "w"),
+            stderr=subprocess.STDOUT,
+        )
+        log.info("SIM helis reset — simulator restarted")
+        return {"ok": True, "detail": "Simulator restarted"}
+    except Exception as e:
+        log.error("SIM reset failed: %s", e)
+        return {"ok": False, "error": str(e)}

@@ -62,6 +62,7 @@ const I18N = (() => {
             btn_land: "Land",
             btn_rtl: "RTL ALL",
             btn_stop: "STOP",
+            btn_reset_sim: "Reset SIM",
             preflight_checks: "Pre-flight Checks",
             event_log: "Event Log",
             telemetry: "Telemetry",
