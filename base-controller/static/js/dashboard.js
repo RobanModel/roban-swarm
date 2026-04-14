@@ -4,6 +4,7 @@ const Dashboard = (() => {
     const grid = document.getElementById('fleet-grid');
     let vehicles = {};  // sysid -> state
     let helis = [];     // fleet list cache
+    let toggleStatus = {};  // heli_id -> {gps_mode, control_mode}
 
     function fixLabel(fixType) {
         switch (fixType) {
@@ -25,6 +26,9 @@ const Dashboard = (() => {
         const online = v.online || false;
         const ps = paramStatus[heli.id];
         const paramWarn = ps && (ps.needs_check || !ps.sysid_ok);
+        const ts = toggleStatus[heli.id] || {};
+        const gpsMode = ts.gps_mode || 'unknown';
+        const controlMode = ts.control_mode || 'unknown';
         return `
         <div class="heli-card ${online ? 'online' : 'offline'}" id="card-${heli.id}">
             <div class="heli-header">
@@ -43,9 +47,26 @@ const Dashboard = (() => {
                 <span class="label">${I18N.t('lbl_sysid')}</span><span class="value">${heli.sysid}${simOffset ? ` (sim: ${heli.sysid + simOffset})` : ''}</span>
                 <span class="label">${I18N.t('lbl_fw')}</span><span class="value">${v.fw_version || '-'}</span>
             </div>
+            <div class="heli-toggles">
+                <div class="toggle-row">
+                    <span class="toggle-label">GPS</span>
+                    <div class="toggle-switch ${gpsMode === 'rtk' ? 'on' : ''}" onclick="Dashboard.toggleGPS(${heli.id}, '${gpsMode === 'rtk' ? 'direct' : 'rtk'}')">
+                        <span class="toggle-opt ${gpsMode === 'rtk' ? 'active' : ''}">RTK</span>
+                        <span class="toggle-opt ${gpsMode === 'direct' ? 'active' : ''}">Direct</span>
+                    </div>
+                </div>
+                <div class="toggle-row">
+                    <span class="toggle-label">Mode</span>
+                    <div class="toggle-switch ${controlMode === 'swarm' ? 'on' : ''} ${controlMode === 'swarm' && gpsMode !== 'rtk' ? 'blocked' : ''}" onclick="Dashboard.toggleControl(${heli.id}, '${controlMode === 'swarm' ? 'rc' : 'swarm'}')">
+                        <span class="toggle-opt ${controlMode === 'swarm' ? 'active' : ''}">Swarm</span>
+                        <span class="toggle-opt ${controlMode === 'rc' ? 'active' : ''}">RC</span>
+                    </div>
+                </div>
+            </div>
             <div class="heli-actions">
                 <button onclick="Dashboard.configHeli(${heli.id})">Config</button>
                 <button onclick="Dashboard.checkParams(${heli.id})">Check Params</button>
+                <button class="btn-reboot" onclick="Dashboard.rebootHeli(${heli.id})" title="Reboot FC">⟳</button>
             </div>
         </div>`;
     }
@@ -86,7 +107,7 @@ const Dashboard = (() => {
         try {
             const r = await fetch('/api/fleet');
             helis = await r.json();
-            renderAll();
+            await refreshToggleStatus();
         } catch (e) {
             grid.innerHTML = '<p class="placeholder">Error loading fleet.</p>';
         }
@@ -148,9 +169,80 @@ const Dashboard = (() => {
         await refresh();
         refreshBase();
         refreshParamStatus();
+        refreshToggleStatus();
     }
 
-    return { refresh, configHeli, checkParams, refreshAll };
+    async function toggleGPS(heliId, newMode) {
+        const label = newMode === 'rtk' ? 'RTK (OPi)' : 'Direct (uBlox)';
+        if (!confirm(`Switch Heli${String(heliId).padStart(2,'0')} GPS to ${label}? FC will reboot.`)) return;
+        try {
+            const r = await fetch(`/api/fleet/${heliId}/toggle/gps`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: newMode}),
+            });
+            const d = await r.json();
+            if (!r.ok) { alert('Failed: ' + (d.detail || JSON.stringify(d))); return; }
+            // Update cache and re-render
+            if (!toggleStatus[heliId]) toggleStatus[heliId] = {};
+            toggleStatus[heliId].gps_mode = newMode;
+            renderAll();
+        } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function toggleControl(heliId, newMode) {
+        const ts = toggleStatus[heliId] || {};
+        if (newMode === 'swarm' && ts.gps_mode !== 'rtk') {
+            alert('Cannot enable Swarm mode without RTK GPS enabled first.');
+            return;
+        }
+        const label = newMode === 'swarm' ? 'Swarm (GUIDED)' : 'RC Manual';
+        if (!confirm(`Switch Heli${String(heliId).padStart(2,'0')} to ${label}?`)) return;
+        try {
+            const r = await fetch(`/api/fleet/${heliId}/toggle/control`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: newMode}),
+            });
+            const d = await r.json();
+            if (!r.ok) { alert('Failed: ' + (d.detail || JSON.stringify(d))); return; }
+            if (!toggleStatus[heliId]) toggleStatus[heliId] = {};
+            toggleStatus[heliId].control_mode = newMode;
+            renderAll();
+        } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function rebootHeli(heliId) {
+        if (!confirm(`Reboot Heli${String(heliId).padStart(2,'0')} FC? This will interrupt all operations.`)) return;
+        try {
+            await fetch(`/api/fleet/${heliId}/reboot`, {method: 'POST'});
+        } catch (e) { /* ignore */ }
+    }
+
+    async function toggleAll(mode) {
+        const label = mode === 'swarm' ? 'Swarm+RTK' : 'RC+Direct GPS';
+        if (!confirm(`Switch ALL helis to ${label}? FCs will reboot.`)) return;
+        try {
+            const r = await fetch('/api/fleet/toggle/all', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({mode: mode}),
+            });
+            const d = await r.json();
+            if (!r.ok) { alert('Failed: ' + (d.detail || JSON.stringify(d))); return; }
+            refreshToggleStatus();
+        } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function refreshToggleStatus() {
+        for (const h of helis) {
+            try {
+                const r = await fetch(`/api/fleet/${h.id}/toggle/status`);
+                const d = await r.json();
+                toggleStatus[h.id] = d;
+            } catch (e) { /* ignore */ }
+        }
+        renderAll();
+    }
+
+    return { refresh, configHeli, checkParams, refreshAll, toggleGPS, toggleControl, rebootHeli, toggleAll };
 })();
 
 async function updateModeBadge() {

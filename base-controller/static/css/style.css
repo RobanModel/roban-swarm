@@ -338,3 +338,92 @@ footer {
 .badge-real { background: var(--green); color: #000; padding: 4px 12px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; cursor: pointer; border: none; }
 .sim-banner { background: #ff9800; color: #000; text-align: center; padding: 6px; font-weight: bold; font-size: 0.9rem; letter-spacing: 1px; }
 .lang-select { background: var(--bg3); color: var(--fg); border: 1px solid var(--fg2); border-radius: 4px; padding: 2px 4px; font-size: 0.8rem; cursor: pointer; }
+
+/* Toggle switches */
+.heli-toggles {
+    padding: 8px 12px;
+    border-top: 1px solid #1a2a3a;
+}
+.toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+}
+.toggle-label {
+    font-size: 0.8em;
+    color: #8899aa;
+    width: 40px;
+    text-align: right;
+}
+.toggle-switch {
+    display: flex;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 1px solid #334455;
+    font-size: 0.75em;
+}
+.toggle-switch .toggle-opt {
+    padding: 3px 10px;
+    color: #556677;
+    background: #0d1520;
+    transition: all 0.2s;
+}
+.toggle-switch .toggle-opt.active {
+    color: #fff;
+    font-weight: bold;
+}
+.toggle-switch.on .toggle-opt.active {
+    background: #00aa44;
+}
+.toggle-switch:not(.on) .toggle-opt.active {
+    background: #cc4444;
+}
+.toggle-switch.blocked {
+    opacity: 0.4;
+    pointer-events: none;
+}
+.toggle-switch:hover {
+    border-color: #4488aa;
+}
+
+/* Fleet-wide controls */
+.fleet-controls {
+    display: flex;
+    gap: 12px;
+    margin: 8px 0 16px 0;
+}
+.btn-swarm {
+    background: #1a3a2a;
+    color: #44cc66;
+    border: 1px solid #2a5a3a;
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+.btn-swarm:hover { background: #2a4a3a; }
+.btn-rc {
+    background: #3a1a1a;
+    color: #cc6644;
+    border: 1px solid #5a2a2a;
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+.btn-rc:hover { background: #4a2a2a; }
+
+/* Reboot button */
+.btn-reboot {
+    background: #2a1a1a;
+    color: #cc6644;
+    border: 1px solid #5a2a2a;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    min-width: 28px;
+}
+.btn-reboot:hover { background: #4a2a2a; color: #ff8866; }
