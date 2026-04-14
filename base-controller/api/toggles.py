@@ -258,4 +258,9 @@ async def toggle_status(heli_id: int):
         "heli_id": heli_id,
         "gps_mode": gps_mode,
         "control_mode": control_mode,
+        "raw": {
+            "GPS1_TYPE": int(gps_type) if gps_type is not None else None,
+            "FS_GCS_ENABLE": int(fs_gcs) if fs_gcs is not None else None,
+            "RC8_OPTION": int(rc8_opt) if rc8_opt is not None else None,
+        },
     }
