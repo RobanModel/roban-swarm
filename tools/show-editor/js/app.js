@@ -4,11 +4,13 @@
 import { ShowModel } from "./model.js";
 import { validateTiming, validateSafety } from "./validate.js";
 import { TopdownCanvas } from "./canvas.js";
+import { AltitudeView } from "./altitude.js";
 import { SidePanel } from "./sidepanel.js";
 import { Timeline } from "./timeline.js";
 
 const model = new ShowModel();
 const canvas = new TopdownCanvas(document.getElementById("topdown"), model);
+const altitude = new AltitudeView(document.getElementById("altitude"), model);
 const sidePanel = new SidePanel(document.getElementById("side-pane"), model);
 const timeline = new Timeline(document.getElementById("timeline-bar"), model);
 
@@ -170,3 +172,4 @@ window.__model = model;
 window.__canvas = canvas;
 window.__timeline = timeline;
 window.__sidePanel = sidePanel;
+window.__altitude = altitude;

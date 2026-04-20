@@ -90,17 +90,34 @@ main {
 
 .canvas-pane {
   flex: 1;
-  position: relative;
   min-width: 0;
   background: var(--bg);
   display: flex;
+  flex-direction: column;
 }
 
-.canvas-pane canvas {
+.topdown-wrap {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  display: flex;
+}
+.topdown-wrap canvas {
   flex: 1;
   display: block;
   width: 100%;
   height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+canvas.altitude-canvas {
+  height: 160px;
+  flex-shrink: 0;
+  display: block;
+  width: 100%;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
   cursor: crosshair;
   touch-action: none;
 }
