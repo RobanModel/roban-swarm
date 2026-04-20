@@ -3,6 +3,7 @@
 // change/blur/Enter so mid-typing doesn't thrash the canvas.
 
 import { heliColor } from "./colors.js";
+import { validateTiming, validateSafety } from "./validate.js";
 
 export class SidePanel {
   constructor(root, model) {
@@ -32,7 +33,11 @@ export class SidePanel {
         ? selTrack.waypoints[sel.waypointIdx]
         : null;
 
+    const timingErr = validateTiming(s);
+    const safetyWarn = validateSafety(s);
+
     this.root.innerHTML = [
+      this._validationSection(timingErr, safetyWarn),
       this._showSection(s),
       this._heliListSection(s, selTrack),
       selTrack ? this._trackDetailSection(selTrack, sel.waypointIdx) : "",
@@ -43,6 +48,46 @@ export class SidePanel {
   }
 
   // --------- section builders ---------
+
+  _validationSection(timingErr, safetyWarn) {
+    const total = timingErr.length + safetyWarn.length;
+    if (total === 0) {
+      return `
+        <section class="pane-section validation-section">
+          <h2>Validation <span class="ok-badge">OK</span></h2>
+          <p class="hint">Timing and 3m safety separation both clean.</p>
+        </section>
+      `;
+    }
+    const items = [];
+    for (const e of timingErr) {
+      items.push(`
+        <li class="err" data-jump-t="${e.t}" data-jump-heli="${e.heli_id}">
+          <span class="chip err-chip">err</span>
+          <span class="issue-text">${esc(e.msg)}</span>
+        </li>
+      `);
+    }
+    for (const w of safetyWarn) {
+      const primary = w.heli_ids?.[0] ?? "";
+      const helis = (w.heli_ids || []).join(",");
+      items.push(`
+        <li class="warn" data-jump-t="${w.t}" data-jump-heli="${primary}" data-jump-helis="${helis}">
+          <span class="chip warn-chip">warn</span>
+          <span class="issue-text">${esc(w.msg)}</span>
+        </li>
+      `);
+    }
+    const errTxt = timingErr.length ? `<span class="err-badge">${timingErr.length} err</span>` : "";
+    const warnTxt = safetyWarn.length ? `<span class="warn-badge">${safetyWarn.length} warn</span>` : "";
+    return `
+      <section class="pane-section validation-section">
+        <h2>Validation ${errTxt} ${warnTxt}</h2>
+        <ul class="validation-list">${items.join("")}</ul>
+        <p class="hint">Click an entry to jump to that time.</p>
+      </section>
+    `;
+  }
 
   _showSection(s) {
     return `
@@ -202,6 +247,26 @@ export class SidePanel {
   // --------- event handlers ---------
 
   _bindHandlers() {
+    // validation issue click → jump to t, select primary heli
+    for (const li of this.root.querySelectorAll("[data-jump-t]")) {
+      li.addEventListener("click", () => {
+        const t = Number.parseFloat(li.dataset.jumpT);
+        if (Number.isFinite(t)) this.model.setTime(t);
+        const hid = Number.parseInt(li.dataset.jumpHeli ?? "", 10);
+        if (Number.isInteger(hid) && this.model.getTrack(hid)) {
+          // Find the waypoint at or nearest to t for that heli
+          const track = this.model.getTrack(hid);
+          let nearest = 0;
+          let best = Infinity;
+          for (let i = 0; i < track.waypoints.length; i++) {
+            const d = Math.abs(track.waypoints[i].t - t);
+            if (d < best) { best = d; nearest = i; }
+          }
+          this.model.select(hid, nearest);
+        }
+      });
+    }
+
     // heli row click → select
     for (const row of this.root.querySelectorAll(".heli-row")) {
       row.addEventListener("click", (e) => {
@@ -332,6 +397,15 @@ function num(inp) {
 
 function attr(s) {
   return String(s).replaceAll('"', "&quot;");
+}
+
+function esc(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function pad(n) {
