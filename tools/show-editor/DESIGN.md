@@ -35,13 +35,14 @@ Anywhere this doc and the Pydantic file disagree, **the Pydantic file wins.**
 | 2 | Heli add / remove; per-heli `heli_id` (1-99); per-heli `HeliStyle` fields | yes |
 | 3 | Top-down 2D canvas (N/E), grid with scale, origin marker, pan + zoom | yes |
 | 4 | Click canvas to add waypoint at current scrubber time; drag to move; delete key | yes |
-| 5 | Side panel: numeric edit of `t`, `pos.n`, `pos.e`, `pos.d`, `hold_s`, optional `vel` | yes |
+| 5 | Side panel: numeric edit of `t`, `pos.n`, `pos.e`, altitude (`-d`), optional `vel`; "Add hold here (N s)" button | yes |
 | 6 | Timeline scrubber (0..`duration_s`), linear interpolation at scrub time | yes |
 | 7 | Playback: play / pause / speed (0.25, 0.5, 1, 2, 4); loop | yes |
-| 8 | Altitude-over-time view (-d vs t), click to add / drag to edit | yes |
+| 8 | Altitude-over-time view (altitude vs t), click to add / drag to edit | yes |
 | 9 | Live validation panel — `validate_timing` + `validate_safety` with jump-to-time links | yes |
-| 10 | Export: exact shape Pydantic accepts | yes |
-| 11 | 2-3 example shows in `examples/` | yes |
+| 10 | Speed-graded trajectory polylines (Strava-style color gradient, scale anchored to `max_speed`) | yes |
+| 11 | Export: exact shape Pydantic accepts, `hold_s` never emitted (expanded into waypoint pairs) | yes |
+| 12 | 2-3 example shows in `examples/` | yes |
 
 ### v1 explicitly excludes
 
@@ -100,8 +101,10 @@ is visible to anyone reading the code, no TypeScript toolchain needed.
  *   t: number,               // seconds from show start, >= 0
  *   pos: Vec3,
  *   vel?: Vec3,              // optional velocity hint
- *   hold_s?: number,         // default 0, hold at wp for N seconds
  * }} Waypoint */
+// Note: hold_s is never carried in the in-memory model. On load, any
+// hold_s > 0 is expanded into a paired waypoint (same pos, t + hold_s).
+// On save, hold_s is never emitted.
 
 /** @typedef {{
  *   max_speed: number,       // m/s, > 0, default 5.0
@@ -151,16 +154,12 @@ returned). A light extension:
   it as a clickable "jump to t=12.5s, select Heli01" link.
 - Re-validated on every model change. Debounced at 100 ms to avoid thrashing.
 
-**Safety-check interpolation note:** `ShowFile._pos_at` in the Python code
-performs plain linear interpolation *without* respecting `hold_s`. That is
-what `validate_safety` uses. `FlightDaemon._interpolate` *does* respect
-`hold_s`. v1 matches the Python behavior exactly — `validate.js` uses
-hold-unaware interpolation for the separation check (so warnings line up
-with what the Python validator says), while the canvas/timeline preview
-uses hold-aware interpolation (so the visible animation matches what the
-daemon actually streams). This discrepancy is documented in the README and
-is worth raising with the user as a possible bug in `show_format.py`, but
-the editor should not silently diverge.
+**Interpolation:** plain linear, everywhere. Because the editor expands
+`hold_s` into waypoint pairs on load and never emits the field (see
+decision 6), the validator and the canvas preview agree by construction —
+both use the same `lerp(wp_i, wp_{i+1}, frac)` as `ShowFile._pos_at`. On
+load, a validator error is raised if any `hold_s` window would overlap
+the next waypoint (`t + hold_s >= wps[i+1].t`).
 
 ## Interactions
 
@@ -172,7 +171,12 @@ the editor should not silently diverge.
   5th line.
 - Origin marker: crosshair at (0, 0) with small "N / E" label.
 - Each heli rendered as:
-  - Waypoint dots connected by polyline in the heli's color.
+  - Waypoint dots connected by polyline. Polyline is **color-graded by
+    instantaneous speed** — sampled along the segment from the linear
+    interpolation, anchored to that heli's `max_speed`. Blue (stopped) →
+    green → yellow → red (at `max_speed`). Over-speed segments pulse red.
+    Hold pairs (same `(n,e,d)` at different `t`) render as a single
+    enlarged dot with a small clock glyph.
   - A triangle marker at the interpolated position for the current scrubber
     time, pointing in the direction of instantaneous velocity (from
     neighboring waypoints).
@@ -180,7 +184,7 @@ the editor should not silently diverge.
 - Left-click on empty space (with a heli selected): add waypoint at the
   cursor position with `t = scrubber time`, `d = interpolated d` (from
   neighboring wps, so a click on the top-down view doesn't change altitude).
-- Left-click + drag on a waypoint: move in N/E; `d`, `t`, `hold_s` unchanged.
+- Left-click + drag on a waypoint: move in N/E; `d` and `t` unchanged.
 - Shift-click on a waypoint: toggle multi-select (v1: single-select only,
   wire the event but leave multi as a v2 hook).
 - Delete / Backspace: remove selected waypoint. If it's the only waypoint
@@ -189,14 +193,18 @@ the editor should not silently diverge.
 
 ### Altitude view
 
-Horizontal axis = time (0..`duration_s`). Vertical = `-d` (altitude above
-ground in meters; up is up). Waypoints shown as dots on each heli's polyline.
+Horizontal axis = time (0..`duration_s`). Vertical = **altitude in meters
+AGL** (positive up, 0 at takeoff ground). Under the hood this is `-d`;
+the UI never exposes the sign flip. Waypoints shown as dots on each
+heli's polyline; polyline color-graded by speed (same scale as the
+top-down view).
 
 - Click on empty space (with a heli selected): add waypoint at that `t` with
-  `pos.n, pos.e` interpolated from neighbors, `pos.d = -clicked_altitude`.
+  `pos.n, pos.e` interpolated from neighbors and `pos.d = -clicked_altitude`
+  (ground click → `d=0` → altitude 0).
 - Drag waypoint: edit both `t` and altitude simultaneously. Clamp `t` into
   [neighbor-left.t, neighbor-right.t] to preserve ordering. Visually snap
-  at 0.1 s.
+  at 0.1 s. Altitude clamped at 0 (no burying the heli).
 
 ### Timeline
 
@@ -212,7 +220,7 @@ ground in meters; up is up). Waypoints shown as dots on each heli's polyline.
 Layout: top-down canvas takes the main area. Right panel shows the tree:
 - **Show** (name, home lat/lon/alt, duration)
   - **Heli 1** (heli_id, style fields)
-    - Waypoint 0 (t, n, e, d, hold_s, vel?)
+    - Waypoint 0 (t, n, e, alt=`-d`, vel?) + [Add hold here (N s)] button
     - Waypoint 1 ...
   - **Heli 2** ...
 - "+ Add heli" / "+ Add waypoint" buttons.
@@ -257,7 +265,8 @@ build, whichever keeps the canvas largest.
 - All required Pydantic fields are present.
 - `version` is always `1`.
 - `style` is always a full object (no relying on defaults).
-- Optional fields (`vel`, `hold_s`) are omitted when unset / zero.
+- `vel` is omitted when unset. `hold_s` is never emitted (holds are always
+  expressed as a paired waypoint — see decision 6).
 - Waypoint order matches display order (already sorted by `t` ascending).
 - Numbers are rounded to a reasonable precision (positions to 3 decimals,
   time to 2 decimals) — matches what the Python code writes.
@@ -296,27 +305,39 @@ Font: system UI stack. Monospace only for numeric fields.
 - **One waypoint minimum** (per Pydantic). The editor enforces this: you
   can't delete the last waypoint on a heli; the UI prompts to delete the
   heli instead.
-- **`d` is stored negative**, but edited as **positive altitude**. Side-panel
-  field label reads `alt (m)` = `-d`. Internal storage keeps `d` to stay
-  aligned with the schema.
+- **`d` is stored negative** (NED), edited everywhere as **positive AGL
+  altitude**. Side-panel field label reads `alt (m)`. Altitude view's
+  vertical axis is AGL meters. Internal model keeps `d` to stay aligned
+  with the Pydantic schema — the sign flip is purely at the UI boundary.
 - **Validation runs on the full show** (not per-heli) because `validate_safety`
   is pairwise. Debounced to 100 ms.
 - **No autosave.** The user explicitly prefers artifacts that don't change
   under them. Unsaved-change indicator (`*` in title bar) is enough.
-- **Playback preview uses hold-aware linear interp** (matches
-  `FlightDaemon._interpolate`). **Safety validator uses hold-unaware interp**
-  (matches `ShowFile._pos_at`). Intentional; see "Validation" section above.
+- **`hold_s` is never in the in-memory model.** Expanded on load, re-
+  expressed as waypoint pairs on save. Linear interp everywhere, validator
+  and preview agree by construction. See decision 6.
 - **`vel` hint stays optional.** If the user never touches it, it stays
   absent in the JSON. Editing any of `vel.n/e/d` materializes the object.
+- **Speed gradient is a render-only detail**, not model state. Computed
+  from neighboring waypoints on the fly, scaled to each heli's `max_speed`.
 
 ## v2 candidates (not in v1)
 
+- **Terrain / map overlay** (Mission-Planner-style): raster tile layer or
+  vector geojson aligned to `home_lat/lon`, so users can draw trajectories
+  around buildings, trees, and no-fly zones. A stub transparent layer in
+  `canvas.js` is provisioned in v1 so this can land without restructuring.
+- **Operator registration / KYC:** form on first launch captures name,
+  operator license, agreed T&Cs, stored in a reserved `localStorage` key.
+  The base station / OPi will later require this before loading a show —
+  legal/traceability. v1 reserves the key name, implements nothing.
 - 3D perspective view using Three.js (vendored).
 - Jerk-limited trajectory preview — port the minimum-jerk planner from the
   flight daemon so the animation matches what helis actually fly, not the
   linear idealization.
 - Collision heat map (sample 10 Hz across all pairs, paint dense regions).
-- CSV import (columns: `heli_id, t, n, e, d, hold_s, vn, ve, vd`).
+- CSV import (columns: `heli_id, t, n, e, d, vn, ve, vd` — hold expressed
+  as repeated rows, same as the JSON format).
 - Blender export plug-in format.
 - Multi-heli formation generators (line, circle, grid) with one-click
   insert at current time.
@@ -326,22 +347,59 @@ Font: system UI stack. Monospace only for numeric fields.
   the original brief** (local tool only), but flagged in case the user
   later wants it.
 
-## Open questions for the user
+## Resolved decisions
 
-1. **Altitude display convention:** show altitude as `-d` everywhere in the
-   UI (positive-up), while JSON keeps `d` negative. OK? (Assumed yes.)
-2. **Units:** meters and seconds throughout. No imperial. OK?
-3. **Angle representation:** `angle_max_deg` edited as degrees (as named).
-   OK?
-4. **`home_lat / home_lon` editing:** the flight daemon overrides these at
-   lineup. Should the editor even expose them, or treat them as read-only
-   placeholders for preview-only? Proposal: editable in the side panel,
-   with a tooltip explaining they're informational.
-5. **Saved UI prefs:** OK to use `localStorage` for zoom level / last
-   filename? Nothing about show content would be persisted there.
-6. **The `hold_s` vs `_pos_at` inconsistency** in `show_format.py`: worth
-   raising as a separate bug? The editor matches the Python behavior
-   exactly in v1, but we should flag it.
+1. **Altitude display:** UI shows altitude as **+AGL** (positive meters above
+   ground, 0 at takeoff). JSON keeps `d` negative per NED convention. Side-
+   panel label reads `alt (m)`.
+2. **Units:** m / kg / s throughout. No imperial. Trajectory polylines on both
+   the top-down and altitude views are **color-graded by instantaneous
+   speed** (Strava-style — slow = cool, fast = warm) so the editor surfaces
+   speed visually without a separate chart. Color scale anchored to the
+   heli's `max_speed` style value so per-heli hot = "at the style limit."
+3. **Angle convention:** anywhere a compass heading or direction is displayed
+   (future: staging heading, preview arrows, etc.), use **0–360° compass
+   format** (0 = N, 90 = E). `angle_max_deg` is a *lean-angle constraint*,
+   not a heading — it stays 0–60 in the style panel, labeled clearly as
+   "max lean / bank (°)" to avoid confusion.
+4. **`home_lat / home_lon`:** treated as optional metadata. The flight daemon
+   **overrides these at lineup**, so the editor does not rely on them for
+   preview or safety. They're editable in the side panel for the sake of
+   users who want to scaffold a show before going to the field, but empty
+   (0/0) is valid and expected. A **terrain / map overlay hook** is
+   provisioned for v2 (Mission-Planner-style: load a raster or vector map
+   layer aligned to home, so users can draw trajectories around buildings,
+   trees, and no-fly zones). v1 leaves a stub `canvas.js` layer for this —
+   no rendering yet.
+5. **`localStorage`:** used for UI preferences only (zoom, pan, last-opened
+   filename, last-used per-heli colors if overridden). **Never** for show
+   content. Also provisioned (stub only, no logic): a `registration` key
+   where a future build will store operator KYC info — name, operator
+   license, agreed T&Cs — which the base station/OPi will later require
+   before loading a show. v1 reads/writes nothing to this key; it's just a
+   reserved name so a later feature can land without migration.
+6. **`hold_s` — Option A (editor expands, never emits):**
+   - On **load**, any waypoint with `hold_s > 0` is expanded to two
+     waypoints at the same `(n, e, d)`: one at `t`, one at `t + hold_s`.
+     The loaded model never carries a non-zero `hold_s`.
+   - On **save**, the editor never writes a `hold_s` field. Held points
+     always appear as paired waypoints in the JSON.
+   - Validator rule: when expanding, the new pair's end time must be
+     strictly less than the next waypoint's `t` — otherwise the load errors
+     out with "heli X wp\[i\] hold overlaps wp\[i+1\]" and the user fixes
+     the source file.
+   - Benefit: linear interpolation becomes the only interpretation. Canvas
+     animation and safety validator agree by construction, no hold-aware/
+     hold-unaware split. The daemon's `_interpolate` hold bug (position
+     jump at end of hold — see `flight_daemon.py:1067`) stops mattering
+     for editor-authored files, since they never use `hold_s`.
+   - UX: the side panel keeps a **"Add hold here (N seconds)"** button on
+     a selected waypoint. Clicking it inserts the paired waypoint at the
+     same position, with `t = selected.t + N`. User sees two dots on the
+     canvas at the same `(n, e)`, at different `t`, and can drag either
+     independently.
+   - Schema / Pydantic / daemon are **untouched** — hand-written files with
+     `hold_s` still work on the daemon. Only the editor opts out.
 
 ## Build order
 
