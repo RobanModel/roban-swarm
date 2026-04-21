@@ -13,12 +13,15 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import { heliColor } from "./colors.js";
 import { catmullRom } from "./smoothing.js";
+import { Lifecycle } from "./lifecycle.js";
 
 export class ThreeView {
   constructor(canvasEl, model) {
     this.el = canvasEl;
     this.model = model;
+    this.lifecycle = new Lifecycle(model);
     this.showSmooth = false;
+    this.showLifecycle = true;
     this._visible = false;
     this._disposed = false;
 
@@ -60,8 +63,10 @@ export class ThreeView {
     this.scene.add(this._makeLabel("Up", 0, 3.2, 0, "#a0ff00"));
 
     this.tracksGroup = new THREE.Group();
+    this.lifecycleGroup = new THREE.Group();
     this.markersGroup = new THREE.Group();
     this.scene.add(this.tracksGroup);
+    this.scene.add(this.lifecycleGroup);
     this.scene.add(this.markersGroup);
 
     // Model subscriptions
@@ -88,17 +93,28 @@ export class ThreeView {
     this._rebuildTracks();
   }
 
-  /** Frame the camera on all current waypoints. */
+  setShowLifecycle(on) {
+    this.showLifecycle = !!on;
+    this._rebuildTracks();
+  }
+
+  /** Frame the camera on all current waypoints (and lineup if present). */
   fitAll() {
     const s = this.model.show;
     if (!s) return;
     const box = new THREE.Box3();
     let hasAny = false;
+    const expand = (p) => {
+      if (!hasAny) { box.min.copy(p); box.max.copy(p); hasAny = true; }
+      else box.expandByPoint(p);
+    };
     for (const t of s.tracks) {
-      for (const w of t.waypoints) {
-        const p = nedToThree(w.pos.n, w.pos.e, w.pos.d);
-        if (!hasAny) { box.min.copy(p); box.max.copy(p); hasAny = true; }
-        else box.expandByPoint(p);
+      for (const w of t.waypoints) expand(nedToThree(w.pos.n, w.pos.e, w.pos.d));
+    }
+    const positions = s.lineup?.positions;
+    if (positions) {
+      for (const p of Object.values(positions)) {
+        expand(nedToThree(p.n, p.e, 0));
       }
     }
     if (!hasAny) return;
@@ -150,11 +166,91 @@ export class ThreeView {
 
   _rebuildTracks() {
     this._clearGroup(this.tracksGroup);
+    this._clearGroup(this.lifecycleGroup);
     this._clearGroup(this.markersGroup);
     const show = this.model.show;
     if (!show) return;
     for (const track of show.tracks) this._buildTrack(track);
+    if (this.showLifecycle && this.lifecycle.hasLineup()) {
+      this._buildLifecycle();
+    }
     this._updateMarkers();
+  }
+
+  _buildLifecycle() {
+    const lf = this.lifecycle;
+    const show = this.model.show;
+
+    // Lineup markers — small flat boxes on the ground, color-coded per heli.
+    const boxGeom = new THREE.BoxGeometry(0.35, 0.08, 0.35);
+    for (const track of show.tracks) {
+      const lineup = lf.lineupPos(track.heli_id);
+      if (!lineup) continue;
+      const col = new THREE.Color(heliColor(track.heli_id));
+      const mat = new THREE.MeshLambertMaterial({
+        color: col,
+        emissive: col,
+        emissiveIntensity: 0.15,
+      });
+      const mesh = new THREE.Mesh(boxGeom, mat);
+      mesh.position.copy(nedToThree(lineup.n, lineup.e, 0));
+      this.lifecycleGroup.add(mesh);
+
+      // Tolerance envelope: circle on the ground
+      const tol = show.lineup?.tolerance_m ?? 1.0;
+      if (tol > 0) {
+        const ringGeom = new THREE.RingGeometry(tol - 0.02, tol, 48);
+        ringGeom.rotateX(-Math.PI / 2);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: col,
+          transparent: true,
+          opacity: 0.4,
+          side: THREE.DoubleSide,
+        });
+        const ring = new THREE.Mesh(ringGeom, ringMat);
+        ring.position.copy(nedToThree(lineup.n, lineup.e, 0));
+        ring.position.y = 0.02;
+        this.lifecycleGroup.add(ring);
+      }
+    }
+
+    // Dashed intro/outro paths per heli
+    for (const track of show.tracks) {
+      this._buildLifecyclePath(track);
+    }
+  }
+
+  _buildLifecyclePath(track) {
+    const lf = this.lifecycle;
+    const show = this.model.show;
+    const introDur = lf.introDuration();
+    const outroDur = lf.outroDuration();
+    const col = new THREE.Color(heliColor(track.heli_id));
+    const dashMat = new THREE.LineDashedMaterial({
+      color: col,
+      dashSize: 0.35,
+      gapSize: 0.25,
+      transparent: true,
+      opacity: 0.6,
+    });
+
+    const addSegment = (tStart, tEnd) => {
+      const pts = [];
+      const samples = 48;
+      for (let i = 0; i <= samples; i++) {
+        const tt = tStart + (tEnd - tStart) * (i / samples);
+        const p = lf.positionAt(track.heli_id, tt);
+        if (p) pts.push(nedToThree(p.n, p.e, p.d));
+      }
+      if (pts.length < 2) return;
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      const line = new THREE.Line(geom, dashMat);
+      line.computeLineDistances();
+      this.lifecycleGroup.add(line);
+    };
+
+    if (introDur > 0) addSegment(-introDur, 0);
+    if (outroDur > 0) addSegment(show.duration_s, show.duration_s + outroDur);
   }
 
   _buildTrack(track) {
@@ -226,7 +322,7 @@ export class ThreeView {
     const t = this.model.time;
     const geom = new THREE.SphereGeometry(0.3, 16, 16);
     for (const track of show.tracks) {
-      const p = this.model.interpolate(track, t);
+      const p = this.lifecycle.positionAt(track.heli_id, t);
       if (!p) continue;
       const mat = new THREE.MeshLambertMaterial({
         color: heliColor(track.heli_id),

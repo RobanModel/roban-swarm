@@ -4,6 +4,7 @@
 
 import { heliColor, speedColor } from "./colors.js";
 import { catmullRom } from "./smoothing.js";
+import { Lifecycle } from "./lifecycle.js";
 
 const MIN_SCALE = 2;       // px/m — zoomed all the way out
 const MAX_SCALE = 400;     // px/m — zoomed all the way in
@@ -25,13 +26,21 @@ export class TopdownCanvas {
     this.el = canvasEl;
     this.ctx = canvasEl.getContext("2d");
     this.model = model;
+    this.lifecycle = new Lifecycle(model);
     this.view = { centerN: 0, centerE: 0, scale: 20 };
     this.showSmooth = false; // dashed Catmull-Rom overlay, planning aid only
+    this.showLifecycle = true; // render lineup + intro/outro dashed paths
     this._dpr = window.devicePixelRatio || 1;
     this._raf = null;
     this._pan = null;
+    this._draggingLineup = null;
     this._bindEvents();
     this._resize();
+    this._scheduleRender();
+  }
+
+  setShowLifecycle(on) {
+    this.showLifecycle = !!on;
     this._scheduleRender();
   }
 
@@ -161,10 +170,11 @@ export class TopdownCanvas {
     const rect = this.el.getBoundingClientRect();
     const px = ev.clientX - rect.left;
     const py = ev.clientY - rect.top;
-    const hit = this._hitTest(px, py);
     ev.preventDefault();
     this.el.setPointerCapture(ev.pointerId);
 
+    // Priority 1: waypoint hit (editing the show).
+    const hit = this._hitTest(px, py);
     if (hit) {
       this.model.select(hit.heliId, hit.wpIdx);
       this._drag = {
@@ -175,9 +185,24 @@ export class TopdownCanvas {
         startE: hit.wp.pos.e,
         moved: false,
       };
-    } else {
-      this._clickAdd = { startPx: px, startPy: py };
+      return;
     }
+    // Priority 2: lineup dot hit (editing the planned placement).
+    if (this.showLifecycle) {
+      const lineupHit = this._hitTestLineup(px, py);
+      if (lineupHit) {
+        this.model.select(lineupHit.heliId, null);
+        this._draggingLineup = {
+          heliId: lineupHit.heliId,
+          startNE: this.screenToNE(px, py),
+          startN: lineupHit.pos.n,
+          startE: lineupHit.pos.e,
+        };
+        return;
+      }
+    }
+    // Empty space: click-to-add waypoint.
+    this._clickAdd = { startPx: px, startPy: py };
   }
 
   _onPointerMove(ev) {
@@ -187,6 +212,17 @@ export class TopdownCanvas {
       this.view.centerE = this._pan.startCenterE - dx / this.view.scale;
       this.view.centerN = this._pan.startCenterN + dy / this.view.scale;
       this._scheduleRender();
+      return;
+    }
+    if (this._draggingLineup) {
+      const rect = this.el.getBoundingClientRect();
+      const ne = this.screenToNE(ev.clientX - rect.left, ev.clientY - rect.top);
+      const d = this._draggingLineup;
+      this.model.setLineupPos(d.heliId, {
+        n: d.startN + (ne.n - d.startNE.n),
+        e: d.startE + (ne.e - d.startNE.e),
+        d: 0,
+      });
       return;
     }
     if (this._drag) {
@@ -209,6 +245,7 @@ export class TopdownCanvas {
   _onPointerUp(ev) {
     try { this.el.releasePointerCapture?.(ev.pointerId); } catch {}
     if (this._pan) { this._pan = null; return; }
+    if (this._draggingLineup) { this._draggingLineup = null; return; }
     if (this._drag) { this._drag = null; return; }
     if (this._clickAdd) {
       const rect = this.el.getBoundingClientRect();
@@ -234,6 +271,20 @@ export class TopdownCanvas {
         if (Math.hypot(scr.x - px, scr.y - py) < HIT_RADIUS) {
           return { heliId: track.heli_id, wpIdx: wi, wp };
         }
+      }
+    }
+    return null;
+  }
+
+  _hitTestLineup(px, py) {
+    const positions = this.model.show?.lineup?.positions;
+    if (!positions) return null;
+    const HIT_RADIUS = 9;
+    for (const [key, pos] of Object.entries(positions)) {
+      const heliId = Number.parseInt(key, 10);
+      const scr = this.neToScreen(pos.n, pos.e);
+      if (Math.hypot(scr.x - px, scr.y - py) < HIT_RADIUS) {
+        return { heliId, pos };
       }
     }
     return null;
@@ -278,6 +329,12 @@ export class TopdownCanvas {
 
     const show = this.model.show;
     if (show) {
+      // Lifecycle preview (below the show polyline so it doesn't hide
+      // the primary trajectory).
+      if (this.showLifecycle && this.lifecycle.hasLineup()) {
+        for (const track of show.tracks) this._drawIntroOutroPaths(track);
+        for (const track of show.tracks) this._drawLineupDot(track);
+      }
       if (this.showSmooth) {
         for (const track of show.tracks) this._drawSmoothOverlay(track);
       }
@@ -285,6 +342,88 @@ export class TopdownCanvas {
       for (const track of show.tracks) this._drawWaypoints(track);
       for (const track of show.tracks) this._drawLiveMarker(track);
     }
+  }
+
+  _drawLineupDot(track) {
+    const lineup = this.lifecycle.lineupPos(track.heli_id);
+    if (!lineup) return;
+    const ctx = this.ctx;
+    const col = heliColor(track.heli_id);
+    const tol = this.model.show?.lineup?.tolerance_m ?? 1.0;
+    const { x, y } = this.neToScreen(lineup.n, lineup.e);
+    // Tolerance envelope
+    if (tol > 0) {
+      ctx.save();
+      ctx.strokeStyle = col + "55";
+      ctx.fillStyle = col + "11";
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.arc(x, y, tol * this.view.scale, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Hollow square marker (lineup = ground placement, distinct from wp dots)
+    ctx.save();
+    ctx.fillStyle = "rgba(26, 26, 46, 0.8)";
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.rect(x - 5, y - 5, 10, 10);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.font = "9px var(--font-mono), monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`H${String(track.heli_id).padStart(2, "0")}▾`, x + 7, y + 4);
+    ctx.restore();
+  }
+
+  _drawIntroOutroPaths(track) {
+    const lf = this.lifecycle;
+    const ctx = this.ctx;
+    const col = heliColor(track.heli_id);
+    ctx.save();
+    ctx.strokeStyle = col + "88";
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 1;
+
+    // Intro: lineup → over-start-at-hover → wp[0]
+    const introDur = lf.introDuration();
+    if (introDur > 0) {
+      const samples = 32;
+      ctx.beginPath();
+      let first = true;
+      for (let i = 0; i <= samples; i++) {
+        const tt = -introDur + (introDur * i) / samples;
+        const p = lf.positionAt(track.heli_id, tt);
+        if (!p) continue;
+        const { x, y } = this.neToScreen(p.n, p.e);
+        if (first) { ctx.moveTo(x, y); first = false; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // Outro
+    const outroDur = lf.outroDuration();
+    if (outroDur > 0) {
+      const show = this.model.show;
+      const samples = 32;
+      ctx.beginPath();
+      let first = true;
+      for (let i = 0; i <= samples; i++) {
+        const tt = show.duration_s + (outroDur * i) / samples;
+        const p = lf.positionAt(track.heli_id, tt);
+        if (!p) continue;
+        const { x, y } = this.neToScreen(p.n, p.e);
+        if (first) { ctx.moveTo(x, y); first = false; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _drawSmoothOverlay(track) {
@@ -472,7 +611,7 @@ export class TopdownCanvas {
 
   _drawLiveMarker(track) {
     const ctx = this.ctx;
-    const pos = this.model.interpolate(track, this.model.time);
+    const pos = this.lifecycle.positionAt(track.heli_id, this.model.time);
     if (!pos) return;
     const vel = this.model.velAt(track, this.model.time);
     const col = heliColor(track.heli_id);

@@ -48,6 +48,7 @@ export class ShowModel extends EventBus {
       home_lat: 0,
       home_lon: 0,
       home_alt_m: 0,
+      lineup: null,
       duration_s,
       tracks: [
         {
@@ -116,7 +117,60 @@ export class ShowModel extends EventBus {
         }),
       })),
     };
+    // Emit optional lineup when present.
+    if (s.lineup && s.lineup.positions) {
+      const entries = Object.entries(s.lineup.positions)
+        .map(([hid, p]) => [hid, {
+          n: round(p.n, 3), e: round(p.e, 3), d: round(p.d, 3),
+        }]);
+      if (entries.length > 0) {
+        out.lineup = {
+          positions: Object.fromEntries(entries),
+          tolerance_m: round(s.lineup.tolerance_m ?? 1.0, 2),
+        };
+      }
+    }
     return JSON.stringify(out, null, 2);
+  }
+
+  // --------- lineup ---------
+
+  /** Merge the lineup block (patch). Pass null to clear. */
+  setLineup(lineup) {
+    if (!this.show) return;
+    if (lineup === null) {
+      this.show.lineup = null;
+    } else {
+      const current = this.show.lineup || { positions: {}, tolerance_m: 1.0 };
+      this.show.lineup = {
+        positions: lineup.positions ? { ...lineup.positions } : current.positions,
+        tolerance_m: lineup.tolerance_m ?? current.tolerance_m,
+      };
+    }
+    this.dirty = true;
+    this.emit("show-changed");
+  }
+
+  /** Set one heli's planned lineup position. Creates lineup block if absent. */
+  setLineupPos(heliId, pos) {
+    if (!this.show) return;
+    const lineup = this.show.lineup || { positions: {}, tolerance_m: 1.0 };
+    lineup.positions = {
+      ...lineup.positions,
+      [heliId]: { n: pos.n, e: pos.e, d: pos.d ?? 0 },
+    };
+    this.show.lineup = lineup;
+    this.dirty = true;
+    this.emit("show-changed");
+  }
+
+  /** Remove one heli's lineup position. */
+  removeLineupPos(heliId) {
+    if (!this.show?.lineup?.positions) return;
+    const { [heliId]: _, ...rest } = this.show.lineup.positions;
+    this.show.lineup = { ...this.show.lineup, positions: rest };
+    this.dirty = true;
+    this.emit("show-changed");
   }
 
   // ------- selection -------
@@ -140,11 +194,16 @@ export class ShowModel extends EventBus {
 
   // ------- time / playback -------
 
+  /**
+   * Set the scrubber time. Allows any finite value — the lifecycle helper
+   * caps the usable range to [-introDuration, duration_s + outroDuration].
+   * Views are expected to clamp the thumb; the model just stores.
+   */
   setTime(t) {
     if (!this.show) return;
-    const clamped = Math.max(0, Math.min(this.show.duration_s, t));
-    if (clamped === this.time) return;
-    this.time = clamped;
+    if (!Number.isFinite(t)) return;
+    if (t === this.time) return;
+    this.time = t;
     this.emit("time-changed");
   }
 
@@ -383,9 +442,37 @@ function parseAndExpand(raw) {
     home_lat: typeof raw.home_lat === "number" ? raw.home_lat : 0,
     home_lon: typeof raw.home_lon === "number" ? raw.home_lon : 0,
     home_alt_m: typeof raw.home_alt_m === "number" ? raw.home_alt_m : 0,
+    lineup: null,
     duration_s: raw.duration_s,
     tracks: [],
   };
+
+  // Optional lineup
+  if (raw.lineup && typeof raw.lineup === "object") {
+    const positions = {};
+    const rawPos = raw.lineup.positions || {};
+    for (const [k, v] of Object.entries(rawPos)) {
+      const hid = Number.parseInt(k, 10);
+      if (!Number.isInteger(hid) || hid < 1 || hid > 99) {
+        errors.push(`lineup.positions: invalid heli_id key "${k}"`);
+        continue;
+      }
+      if (!v || typeof v.n !== "number" || typeof v.e !== "number") {
+        errors.push(`lineup.positions[${hid}]: must be {n, e, d}`);
+        continue;
+      }
+      positions[hid] = {
+        n: v.n,
+        e: v.e,
+        d: typeof v.d === "number" ? v.d : 0,
+      };
+    }
+    show.lineup = {
+      positions,
+      tolerance_m: typeof raw.lineup.tolerance_m === "number"
+        ? raw.lineup.tolerance_m : 1.0,
+    };
+  }
 
   const usedIds = new Set();
   for (let tIdx = 0; tIdx < raw.tracks.length; tIdx++) {

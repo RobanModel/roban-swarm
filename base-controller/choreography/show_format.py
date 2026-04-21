@@ -107,6 +107,25 @@ class HeliTrack(BaseModel):
     )
 
 
+class LineupSpec(BaseModel):
+    """Planned ground placement of each heli before takeoff.
+
+    Informational only from the daemon's perspective — the real lineup
+    is captured from live GPS in `capture_lineup()`. The editor uses
+    this block to preview the intro/outro phases (takeoff, staging,
+    return, descent) and validate safety across the full lifecycle.
+    """
+    positions: dict[int, Vec3] = Field(
+        description="Per-heli planned ground position in NED meters "
+                    "(d should be 0 — on the ground). Key = heli_id.",
+    )
+    tolerance_m: float = Field(
+        default=1.0, ge=0,
+        description="Physical placement uncertainty radius per heli. "
+                    "Used by the editor's variance-aware safety check.",
+    )
+
+
 class ShowFile(BaseModel):
     """Top-level show file — contains metadata + all heli tracks."""
     name: str = Field(description="Show name")
@@ -114,6 +133,11 @@ class ShowFile(BaseModel):
     home_lat: float = Field(description="Home latitude (decimal degrees)")
     home_lon: float = Field(description="Home longitude (decimal degrees)")
     home_alt_m: float = Field(default=0, description="Home altitude AMSL (m)")
+    lineup: Optional[LineupSpec] = Field(
+        default=None,
+        description="Planned lineup + placement tolerance. Optional; daemon "
+                    "captures live lineup from GPS at flight time.",
+    )
     duration_s: float = Field(
         gt=0,
         description="Total show duration (seconds) — must be ≥ last waypoint time",

@@ -361,6 +361,28 @@ canvas.altitude-canvas {
 }
 .err-chip  { color: var(--warn); background: rgba(255, 68, 68, 0.18); }
 .warn-chip { color: #ffbb33; background: rgba(255, 187, 51, 0.18); }
+.lifecycle-chip { color: var(--info); background: rgba(51, 181, 229, 0.18); }
+
+.lineup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.lineup-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.lineup-row .heli-label { flex-shrink: 0; width: 32px; }
+.lineup-row input[type="number"] {
+  width: 60px;
+  flex-shrink: 0;
+}
 
 footer.timeline-bar {
   height: 48px;
@@ -399,6 +421,20 @@ footer.timeline-bar {
   opacity: 0.18;
   pointer-events: none;
   width: 0%;
+}
+.scrubber-intro,
+.scrubber-outro {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(255, 255, 255, 0.05);
+  pointer-events: none;
+  width: 0;
+}
+.scrubber-intro {
+  border-right: 1px dashed rgba(233, 69, 96, 0.4);
+}
+.scrubber-outro {
+  border-left: 1px dashed rgba(233, 69, 96, 0.4);
 }
 .scrubber-ticks {
   position: absolute;

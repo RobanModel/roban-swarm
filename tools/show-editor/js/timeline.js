@@ -3,11 +3,14 @@
 // arrows = ±1s (shift arrows = ±0.1s), Home/End = jump to ends.
 
 import { heliColor } from "./colors.js";
+import { Lifecycle } from "./lifecycle.js";
 
 export class Timeline {
   constructor(root, model) {
     this.root = root;
     this.model = model;
+    this.lifecycle = new Lifecycle(model);
+    this.showLifecycle = true;
     this.playing = false;
     this.speed = 1;
     this._raf = null;
@@ -41,6 +44,8 @@ export class Timeline {
       </select>
       <span id="tl-readout" class="time-readout">—</span>
       <div class="scrubber" id="tl-scrubber">
+        <div class="scrubber-intro" id="tl-intro"></div>
+        <div class="scrubber-outro" id="tl-outro"></div>
         <div class="scrubber-fill" id="tl-fill"></div>
         <div class="scrubber-ticks" id="tl-ticks"></div>
         <div class="scrubber-thumb" id="tl-thumb"></div>
@@ -53,6 +58,21 @@ export class Timeline {
     this.fill = this.root.querySelector("#tl-fill");
     this.thumb = this.root.querySelector("#tl-thumb");
     this.ticksEl = this.root.querySelector("#tl-ticks");
+    this.introEl = this.root.querySelector("#tl-intro");
+    this.outroEl = this.root.querySelector("#tl-outro");
+  }
+
+  /** [tMin, tMax] for the scrubber — extended when lineup is present. */
+  _timeRange() {
+    const s = this.model.show;
+    if (!s) return { tMin: 0, tMax: 1 };
+    if (this.showLifecycle && this.lifecycle.hasLineup()) {
+      return {
+        tMin: -this.lifecycle.introDuration(),
+        tMax: s.duration_s + this.lifecycle.outroDuration(),
+      };
+    }
+    return { tMin: 0, tMax: s.duration_s };
   }
 
   _bindEvents() {
@@ -92,16 +112,20 @@ export class Timeline {
         this.toggle();
       } else if (ev.key === "ArrowLeft") {
         ev.preventDefault();
-        this.model.setTime(this.model.time - (ev.shiftKey ? 0.1 : 1));
+        const { tMin } = this._timeRange();
+        this.model.setTime(Math.max(tMin, this.model.time - (ev.shiftKey ? 0.1 : 1)));
       } else if (ev.key === "ArrowRight") {
         ev.preventDefault();
-        this.model.setTime(this.model.time + (ev.shiftKey ? 0.1 : 1));
+        const { tMax } = this._timeRange();
+        this.model.setTime(Math.min(tMax, this.model.time + (ev.shiftKey ? 0.1 : 1)));
       } else if (ev.key === "Home") {
         ev.preventDefault();
-        this.model.setTime(0);
+        const { tMin } = this._timeRange();
+        this.model.setTime(tMin);
       } else if (ev.key === "End") {
         ev.preventDefault();
-        if (this.model.show) this.model.setTime(this.model.show.duration_s);
+        const { tMax } = this._timeRange();
+        this.model.setTime(tMax);
       }
     });
   }
@@ -110,7 +134,8 @@ export class Timeline {
     if (!this.model.show) return;
     const rect = this.scrubber.getBoundingClientRect();
     const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-    this.model.setTime(frac * this.model.show.duration_s);
+    const { tMin, tMax } = this._timeRange();
+    this.model.setTime(tMin + frac * (tMax - tMin));
   }
 
   // --------- playback ---------
@@ -126,10 +151,11 @@ export class Timeline {
       if (!this.playing) return;
       const dt = (now - this._lastRafMs) / 1000;
       this._lastRafMs = now;
-      const dur = this.model.show.duration_s;
+      const { tMin, tMax } = this._timeRange();
+      const span = Math.max(1e-6, tMax - tMin);
       let t = this.model.time + dt * this.speed;
-      if (t >= dur) t = t - Math.floor(t / dur) * dur; // loop
-      if (t < 0) t = 0;
+      if (t > tMax) t = tMin + ((t - tMin) % span);
+      if (t < tMin) t = tMax - ((tMin - t) % span);
       this.model.setTime(t);
       this._raf = requestAnimationFrame(step);
     };
@@ -149,13 +175,32 @@ export class Timeline {
     this.ticksEl.innerHTML = "";
     const s = this.model.show;
     if (!s || s.duration_s <= 0) return;
-    const dur = s.duration_s;
+    const { tMin, tMax } = this._timeRange();
+    const span = tMax - tMin;
+    if (span <= 0) return;
+    // Intro/outro band sizing
+    if (this.showLifecycle && this.lifecycle.hasLineup()) {
+      const introDur = this.lifecycle.introDuration();
+      const outroDur = this.lifecycle.outroDuration();
+      if (this.introEl) {
+        this.introEl.style.left = "0%";
+        this.introEl.style.width = ((introDur / span) * 100).toFixed(3) + "%";
+      }
+      if (this.outroEl) {
+        const leftPct = ((introDur + s.duration_s) / span) * 100;
+        this.outroEl.style.left = leftPct.toFixed(3) + "%";
+        this.outroEl.style.width = ((outroDur / span) * 100).toFixed(3) + "%";
+      }
+    } else {
+      if (this.introEl) this.introEl.style.width = "0";
+      if (this.outroEl) this.outroEl.style.width = "0";
+    }
     for (const track of s.tracks) {
       const col = heliColor(track.heli_id);
       for (const wp of track.waypoints) {
         const tick = document.createElement("div");
         tick.className = "scrubber-tick";
-        tick.style.left = ((wp.t / dur) * 100).toFixed(3) + "%";
+        tick.style.left = (((wp.t - tMin) / span) * 100).toFixed(3) + "%";
         tick.style.background = col;
         this.ticksEl.appendChild(tick);
       }
@@ -171,12 +216,16 @@ export class Timeline {
       return;
     }
     const t = this.model.time;
-    const dur = s.duration_s;
-    const frac = dur > 0 ? t / dur : 0;
-    const pct = (frac * 100).toFixed(3);
+    const { tMin, tMax } = this._timeRange();
+    const span = Math.max(1e-6, tMax - tMin);
+    const frac = (t - tMin) / span;
+    const pct = (Math.max(0, Math.min(1, frac)) * 100).toFixed(3);
     this.fill.style.width = pct + "%";
     this.thumb.style.left = pct + "%";
-    this.readout.textContent = `${fmtTime(t)} / ${fmtDuration(dur)}`;
+    let phase = "";
+    if (t < 0) phase = " · intro";
+    else if (t > s.duration_s) phase = " · outro";
+    this.readout.textContent = `${fmtSignedTime(t)} / ${fmtDuration(s.duration_s)}${phase}`;
   }
 }
 
@@ -184,6 +233,11 @@ function fmtTime(t) {
   const mm = Math.floor(t / 60);
   const ss = t - mm * 60;
   return `${String(mm).padStart(2, "0")}:${ss.toFixed(1).padStart(4, "0")}`;
+}
+
+function fmtSignedTime(t) {
+  if (t < 0) return "-" + fmtTime(-t);
+  return fmtTime(t);
 }
 
 function fmtDuration(d) {

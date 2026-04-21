@@ -10,6 +10,7 @@
 
 import { heliColor, speedColor } from "./colors.js";
 import { catmullRom } from "./smoothing.js";
+import { Lifecycle } from "./lifecycle.js";
 
 const BG = "#1a1a2e";
 const GRID_MINOR = "#252538";
@@ -30,6 +31,8 @@ export class AltitudeView {
     this.model = model;
     this.viewMaxAlt = 10;
     this.showSmooth = false;
+    this.showLifecycle = true;
+    this.lifecycle = new Lifecycle(model);
     this._dpr = window.devicePixelRatio || 1;
     this._raf = null;
     this._drag = null;
@@ -42,6 +45,24 @@ export class AltitudeView {
   setShowSmooth(on) {
     this.showSmooth = !!on;
     this._scheduleRender();
+  }
+
+  setShowLifecycle(on) {
+    this.showLifecycle = !!on;
+    this._scheduleRender();
+  }
+
+  /** Time range of the scrubber/plot. Includes intro/outro if lifecycle is on. */
+  _timeRange() {
+    const s = this.model.show;
+    if (!s) return { tMin: 0, tMax: 1 };
+    if (this.showLifecycle && this.lifecycle.hasLineup()) {
+      return {
+        tMin: -this.lifecycle.introDuration(),
+        tMax: s.duration_s + this.lifecycle.outroDuration(),
+      };
+    }
+    return { tMin: 0, tMax: s.duration_s };
   }
 
   _size() { return { w: this.el.clientWidth, h: this.el.clientHeight }; }
@@ -68,16 +89,18 @@ export class AltitudeView {
   }
 
   tToX(t) {
-    const s = this.model.show;
-    if (!s || s.duration_s <= 0) return MARGIN_L;
+    const { tMin, tMax } = this._timeRange();
     const { x0, w } = this._plotArea();
-    return x0 + (t / s.duration_s) * w;
+    const span = tMax - tMin;
+    if (span <= 0) return x0;
+    return x0 + ((t - tMin) / span) * w;
   }
   xToT(x) {
-    const s = this.model.show;
-    if (!s || s.duration_s <= 0) return 0;
+    const { tMin, tMax } = this._timeRange();
     const { x0, w } = this._plotArea();
-    return ((x - x0) / w) * s.duration_s;
+    const span = tMax - tMin;
+    if (span <= 0) return tMin;
+    return tMin + ((x - x0) / w) * span;
   }
   altToY(alt) {
     const { y0, h } = this._plotArea();
@@ -129,6 +152,7 @@ export class AltitudeView {
     }
 
     // Compute vertical scale from data (with 20% headroom, min 5m).
+    // Include intro/outro peaks (hover altitude, staggered return altitudes).
     let maxAlt = 5;
     for (const t of show.tracks) {
       for (const wp of t.waypoints) {
@@ -136,14 +160,110 @@ export class AltitudeView {
         if (a > maxAlt) maxAlt = a;
       }
     }
+    if (this.showLifecycle && this.lifecycle.hasLineup()) {
+      const outro = this.lifecycle.outroTimings();
+      if (outro) {
+        for (const per of Object.values(outro.perHeli)) {
+          if (per.returnAlt > maxAlt) maxAlt = per.returnAlt;
+        }
+      }
+      // Staging is at HOVER_ALT_M, which is small; already covered by default
+    }
     this.viewMaxAlt = Math.max(5, Math.ceil(maxAlt * 1.2));
 
     this._drawGrid();
+    this._drawLifecycleBands();
+    if (this.showLifecycle && this.lifecycle.hasLineup()) {
+      for (const track of show.tracks) this._drawIntroOutroAlt(track);
+    }
     if (this.showSmooth) {
       for (const track of show.tracks) this._drawSmoothOverlay(track);
     }
     for (const track of show.tracks) this._drawTrack(track);
     this._drawTimeCursor();
+  }
+
+  /** Shade the intro and outro t-bands so users see the show boundaries. */
+  _drawLifecycleBands() {
+    if (!this.showLifecycle || !this.lifecycle.hasLineup()) return;
+    const ctx = this.ctx;
+    const show = this.model.show;
+    const { y0, h } = this._plotArea();
+    const { tMin } = this._timeRange();
+    ctx.save();
+    ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+    // Intro band: [tMin, 0]
+    if (tMin < 0) {
+      const x0 = this.tToX(tMin);
+      const x1 = this.tToX(0);
+      ctx.fillRect(x0, y0, x1 - x0, h);
+    }
+    // Outro band: [duration_s, tMax]
+    const { tMax } = this._timeRange();
+    if (tMax > show.duration_s) {
+      const x0 = this.tToX(show.duration_s);
+      const x1 = this.tToX(tMax);
+      ctx.fillRect(x0, y0, x1 - x0, h);
+    }
+    // Separator lines at t=0 and t=duration_s
+    ctx.strokeStyle = "rgba(233, 69, 96, 0.4)";
+    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1;
+    for (const t of [0, show.duration_s]) {
+      if (t <= tMin || t >= tMax) continue;
+      const x = Math.round(this.tToX(t)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y0);
+      ctx.lineTo(x, y0 + h);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  _drawIntroOutroAlt(track) {
+    const ctx = this.ctx;
+    const lf = this.lifecycle;
+    const col = heliColor(track.heli_id);
+    const show = this.model.show;
+    ctx.save();
+    ctx.strokeStyle = col + "aa";
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 1.3;
+
+    const introDur = lf.introDuration();
+    if (introDur > 0) {
+      const samples = 32;
+      ctx.beginPath();
+      let first = true;
+      for (let i = 0; i <= samples; i++) {
+        const tt = -introDur + (introDur * i) / samples;
+        const p = lf.positionAt(track.heli_id, tt);
+        if (!p) continue;
+        const x = this.tToX(tt);
+        const y = this.altToY(-p.d);
+        if (first) { ctx.moveTo(x, y); first = false; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    const outroDur = lf.outroDuration();
+    if (outroDur > 0) {
+      const samples = 32;
+      ctx.beginPath();
+      let first = true;
+      for (let i = 0; i <= samples; i++) {
+        const tt = show.duration_s + (outroDur * i) / samples;
+        const p = lf.positionAt(track.heli_id, tt);
+        if (!p) continue;
+        const x = this.tToX(tt);
+        const y = this.altToY(-p.d);
+        if (first) { ctx.moveTo(x, y); first = false; }
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _drawSmoothOverlay(track) {
@@ -172,16 +292,19 @@ export class AltitudeView {
 
   _drawGrid() {
     const ctx = this.ctx;
-    const s = this.model.show;
     const { x0, y0, w, h } = this._plotArea();
+    const { tMin, tMax } = this._timeRange();
+    const span = tMax - tMin;
 
     let tStep = 5;
-    if (s.duration_s > 120) tStep = 10;
-    if (s.duration_s > 300) tStep = 30;
+    if (span > 120) tStep = 10;
+    if (span > 300) tStep = 30;
 
     ctx.strokeStyle = GRID_MINOR;
     ctx.lineWidth = 1;
-    for (let t = 0; t <= s.duration_s + 0.001; t += tStep) {
+    // Snap grid to whole multiples of tStep relative to 0
+    const tStart = Math.ceil(tMin / tStep) * tStep;
+    for (let t = tStart; t <= tMax + 0.001; t += tStep) {
       const x = Math.round(this.tToX(t)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(x, y0);
@@ -209,9 +332,10 @@ export class AltitudeView {
 
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    for (let t = 0; t <= s.duration_s + 0.001; t += tStep) {
+    const tStart2 = Math.ceil(tMin / tStep) * tStep;
+    for (let t = tStart2; t <= tMax + 0.001; t += tStep) {
       const x = this.tToX(t);
-      ctx.fillText(`${t}s`, x, y0 + h + 3);
+      ctx.fillText(`${t.toFixed(0)}s`, x, y0 + h + 3);
     }
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
@@ -279,7 +403,7 @@ export class AltitudeView {
     ctx.stroke();
 
     for (const track of this.model.show.tracks) {
-      const p = this.model.interpolate(track, t);
+      const p = this.lifecycle.positionAt(track.heli_id, t);
       if (!p) continue;
       const y = this.altToY(-p.d);
       ctx.fillStyle = heliColor(track.heli_id);

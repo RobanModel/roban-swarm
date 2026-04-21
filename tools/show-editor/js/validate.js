@@ -33,9 +33,9 @@ export function validateTiming(show) {
 }
 
 /**
- * Pairwise safety separation check. For every pair of tracks, sample each
- * of their combined waypoint times and compute the linear-interpolated 3D
- * distance. Flag any below `minSepM`.
+ * Pairwise safety separation check during the show proper. For every
+ * pair of tracks, sample each of their combined waypoint times and
+ * compute the linear-interpolated 3D distance. Flag any below `minSepM`.
  * @returns {{msg:string, heli_ids:[number, number], t:number, dist:number}[]}
  */
 export function validateSafety(show, minSepM = 3.0) {
@@ -68,6 +68,67 @@ export function validateSafety(show, minSepM = 3.0) {
         }
       }
     }
+  }
+  return warnings;
+}
+
+/**
+ * Lifecycle-wide safety: sample the intro and outro at regular intervals
+ * and check pairwise separation. Uses an injected `positionAt(heli_id, t)`
+ * function so callers can drive it via the Lifecycle helper.
+ *
+ * @param {object} show - the ShowModel's show object
+ * @param {(heliId:number, t:number) => ({n,e,d}|null)} positionAt
+ * @param {{introDuration:number, outroDuration:number}} timings
+ * @param {number} minSepM - separation threshold (default 3.0)
+ * @param {number} stepS - sample step (default 0.5s)
+ * @returns {{msg:string, heli_ids:[number, number], t:number, dist:number, phase:"intro"|"outro"}[]}
+ */
+export function validateLifecycleSafety(show, positionAt, timings, minSepM = 3.0, stepS = 0.5) {
+  const warnings = [];
+  if (!timings) return warnings;
+  const tracks = show.tracks;
+
+  const sampleRange = (tStart, tEnd, phase) => {
+    if (tEnd - tStart <= 0) return;
+    // Worst-offender per heli-pair: only report the closest approach.
+    const worst = new Map();
+    for (let t = tStart; t <= tEnd; t += stepS) {
+      for (let i = 0; i < tracks.length; i++) {
+        for (let j = i + 1; j < tracks.length; j++) {
+          const h1 = tracks[i].heli_id;
+          const h2 = tracks[j].heli_id;
+          const p1 = positionAt(h1, t);
+          const p2 = positionAt(h2, t);
+          if (!p1 || !p2) continue;
+          const dn = p1.n - p2.n, de = p1.e - p2.e, dd = p1.d - p2.d;
+          const dist = Math.sqrt(dn * dn + de * de + dd * dd);
+          if (dist < minSepM) {
+            const key = `${h1}:${h2}`;
+            const cur = worst.get(key);
+            if (!cur || dist < cur.dist) {
+              worst.set(key, { h1, h2, t, dist });
+            }
+          }
+        }
+      }
+    }
+    for (const w of worst.values()) {
+      warnings.push({
+        msg: `Heli${pad(w.h1)} and Heli${pad(w.h2)} within ${w.dist.toFixed(1)}m during ${phase} at t=${fmt(w.t)}s`,
+        heli_ids: [w.h1, w.h2],
+        t: w.t,
+        dist: w.dist,
+        phase,
+      });
+    }
+  };
+
+  const introDur = timings.introDuration ?? 0;
+  const outroDur = timings.outroDuration ?? 0;
+  if (introDur > 0) sampleRange(-introDur, 0, "intro");
+  if (outroDur > 0) {
+    sampleRange(show.duration_s, show.duration_s + outroDur, "outro");
   }
   return warnings;
 }
