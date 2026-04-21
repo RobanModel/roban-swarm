@@ -107,6 +107,34 @@ class HeliTrack(BaseModel):
     )
 
 
+class Sequencing(BaseModel):
+    """Per-show staggering of startup / takeoff / landing.
+
+    Default 0 everywhere = current parallel behavior. Non-zero values
+    insert per-heli delays in the respective phases of
+    flight_daemon._launch_sequence / _landing_sequence.
+    """
+    startup_stagger_s: float = Field(
+        default=0.0, ge=0,
+        description="Delay between arm+spool cycles. Reduces peak rotor "
+                    "noise and gives the operator time to watch each "
+                    "heli come up individually.",
+    )
+    takeoff_stagger_s: float = Field(
+        default=0.0, ge=0,
+        description="Delay between lift-offs. Important when lineup "
+                    "spacing is tight — parallel climb can put helis "
+                    "close at hover altitude.",
+    )
+    landing_stagger_s: float = Field(
+        default=0.0, ge=0,
+        description="Delay between descent starts. Helis hold at their "
+                    "staggered return altitude until it's their turn "
+                    "to descend — only one heli is active in the "
+                    "descent lane at a time.",
+    )
+
+
 class LineupSpec(BaseModel):
     """Planned ground placement of each heli before takeoff.
 
@@ -139,6 +167,11 @@ class ShowFile(BaseModel):
                     "time. Lets a show be designed centered on (0,0,0) and "
                     "translated in space without editing every waypoint. "
                     "Daemon adds this to each wp.pos in `load_show`.",
+    )
+    sequencing: Optional[Sequencing] = Field(
+        default=None,
+        description="Staggered startup / takeoff / landing. Default 0 = "
+                    "parallel (current behavior).",
     )
     lineup: Optional[LineupSpec] = Field(
         default=None,

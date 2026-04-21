@@ -51,6 +51,7 @@ export class SidePanel {
     this.root.innerHTML = [
       this._validationSection(timingErr, safetyWarn, lifecycleWarn),
       this._showSection(s),
+      this._sequencingSection(s),
       this._lineupSection(s),
       this._heliListSection(s, selTrack),
       selTrack ? this._trackDetailSection(selTrack, sel.waypointIdx) : "",
@@ -110,6 +111,31 @@ export class SidePanel {
         <h2>Validation ${errTxt} ${warnTxt}</h2>
         <ul class="validation-list">${items.join("")}</ul>
         <p class="hint">Click to jump. All warnings are soft — export not blocked.</p>
+      </section>
+    `;
+  }
+
+  _sequencingSection(s) {
+    const seq = s.sequencing || {
+      startup_stagger_s: 0, takeoff_stagger_s: 0, landing_stagger_s: 0,
+    };
+    const any = !!s.sequencing;
+    return `
+      <section class="pane-section">
+        <h2>Sequencing ${any ? `<span class="ok-badge">active</span>` : `<span class="hint" style="text-transform:none">parallel</span>`}</h2>
+        <div class="field-row">
+          <label>startup stagger (s)</label>
+          <input type="number" step="0.1" min="0" data-bind="seq.startup_stagger_s" value="${seq.startup_stagger_s}" />
+        </div>
+        <div class="field-row">
+          <label>takeoff stagger (s)</label>
+          <input type="number" step="0.1" min="0" data-bind="seq.takeoff_stagger_s" value="${seq.takeoff_stagger_s}" />
+        </div>
+        <div class="field-row">
+          <label>landing stagger (s)</label>
+          <input type="number" step="0.1" min="0" data-bind="seq.landing_stagger_s" value="${seq.landing_stagger_s}" />
+        </div>
+        <p class="hint">Per-heli delays during arm/spool, takeoff, and descent. Default 0 = all parallel.</p>
       </section>
     `;
   }
@@ -482,6 +508,11 @@ export class SidePanel {
         const current = this.model.show.show_offset ?? { n: 0, e: 0, d: 0 };
         const next = { ...current, [axis]: num(inp) };
         this.model.setShowOffset(next);
+      } else if (bind.startsWith("seq.")) {
+        const field = bind.slice("seq.".length);
+        const v = num(inp);
+        if (v < 0) throw new Error("stagger must be >= 0");
+        this.model.setSequencing({ [field]: v });
       } else if (bind === "lineup.tolerance_m") {
         const v = num(inp);
         if (v < 0) throw new Error("tolerance_m must be >= 0");

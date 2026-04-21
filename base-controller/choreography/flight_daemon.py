@@ -430,6 +430,9 @@ class FlightDaemon:
         """Automated launch sequence."""
         try:
             heli_ids = sorted(self._show.get_heli_ids())
+            seq = self._show.sequencing
+            startup_stagger = (seq.startup_stagger_s if seq else 0.0)
+            takeoff_stagger = (seq.takeoff_stagger_s if seq else 0.0)
 
             # Start in-flight monitoring (runs alongside all flight phases)
             self._monitor_task = asyncio.create_task(
@@ -440,7 +443,12 @@ class FlightDaemon:
             self._state = DaemonState.ARMING
             await self._emit_status()
 
-            for heli_id in heli_ids:
+            for idx, heli_id in enumerate(heli_ids):
+                if idx > 0 and startup_stagger > 0:
+                    log.info("Startup stagger: waiting %.1fs before Heli%02d arm",
+                             startup_stagger, heli_id)
+                    await asyncio.sleep(startup_stagger)
+
                 self._heli_phases[heli_id] = HeliPhase.ARMING
                 await self._emit_phase_progress()
 
@@ -495,22 +503,38 @@ class FlightDaemon:
             await self._emit_status()
 
     async def _parallel_takeoff(self, heli_ids: list[int]):
-        """Parallel takeoff — all helis climb simultaneously.
+        """Takeoff — all helis climb to hover altitude.
 
-        All helis rise to hover altitude at the same time. We wait until
-        ALL have reached altitude before proceeding to horizontal movement.
+        Staggered per show.sequencing.takeoff_stagger_s (0 = parallel).
+        Heli i starts its climb i * stagger_s after phase start; until
+        then it's held at its lineup position on the ground.
         """
         for heli_id in heli_ids:
             self._heli_phases[heli_id] = HeliPhase.TAKING_OFF
         await self._emit_phase_progress()
-        log.info("All helis taking off to %.1fm (parallel)", HOVER_ALT_M)
+        seq = self._show.sequencing
+        takeoff_stagger = (seq.takeoff_stagger_s if seq else 0.0)
+        if takeoff_stagger > 0:
+            log.info("Takeoff: staggered by %.1fs between helis (%.1fm hover)",
+                     takeoff_stagger, HOVER_ALT_M)
+        else:
+            log.info("All helis taking off to %.1fm (parallel)", HOVER_ALT_M)
 
+        phase_start = time.monotonic()
         at_altitude = set()
-        deadline = time.monotonic() + 30
+        # Deadline grows with stagger so the last heli still has time.
+        deadline_extra = (len(heli_ids) - 1) * takeoff_stagger
+        deadline = phase_start + 30 + deadline_extra
 
         while self._state == DaemonState.TAKING_OFF:
-            for heli_id in heli_ids:
+            now = time.monotonic()
+            for idx, heli_id in enumerate(heli_ids):
                 home = self._lineup.home_positions[heli_id]
+                # Before this heli's scheduled lift-off, hold on the ground.
+                heli_start = phase_start + idx * takeoff_stagger
+                if now < heli_start:
+                    await self._send_safe(heli_id, home.n, home.e, 0.0)
+                    continue
                 await self._send_safe(heli_id, home.n, home.e, -(HOVER_ALT_M))
 
                 if heli_id not in at_altitude:
@@ -522,7 +546,7 @@ class FlightDaemon:
             if len(at_altitude) == len(heli_ids):
                 log.info("All helis at hover altitude")
                 break
-            if time.monotonic() > deadline:
+            if now > deadline:
                 raise RuntimeError("Takeoff timeout — not all helis reached altitude")
 
             await asyncio.sleep(TICK_INTERVAL)
@@ -742,8 +766,14 @@ class FlightDaemon:
                     break
                 await asyncio.sleep(TICK_INTERVAL)
 
-            # --- Phase 2: Parallel descent ---
-            log.info("Landing phase 2: parallel descent")
+            # --- Phase 2: Descent (possibly staggered) ---
+            seq = self._show.sequencing
+            landing_stagger = (seq.landing_stagger_s if seq else 0.0)
+            if landing_stagger > 0:
+                log.info("Landing phase 2: staggered descent (%.1fs between helis)",
+                         landing_stagger)
+            else:
+                log.info("Landing phase 2: parallel descent")
             await self._emit_event({"type": "show_event", "event": "descending"})
 
             for heli_id in heli_ids:
@@ -754,14 +784,23 @@ class FlightDaemon:
             descent_d = {hid: return_alts[hid] for hid in heli_ids}
             landed_since = {hid: None for hid in heli_ids}
             landed_set = set()
-            deadline = time.monotonic() + 45
+            descent_start = time.monotonic()
+            # Deadline grows with stagger so the last heli has time.
+            deadline = descent_start + 45 + (len(heli_ids) - 1) * landing_stagger
 
             while self._state == DaemonState.LANDING:
-                for heli_id in heli_ids:
+                now = time.monotonic()
+                for idx, heli_id in enumerate(heli_ids):
                     if heli_id in landed_set:
                         continue
 
                     home = self._lineup.home_positions[heli_id]
+
+                    # Hold at return altitude until this heli's turn.
+                    heli_start = descent_start + idx * landing_stagger
+                    if now < heli_start:
+                        await self._send_safe(heli_id, home.n, home.e, return_alts[heli_id])
+                        continue
 
                     # Lower target altitude
                     descent_d[heli_id] += LANDING_DESCENT_RATE * TICK_INTERVAL

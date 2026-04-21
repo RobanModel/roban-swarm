@@ -49,6 +49,7 @@ export class ShowModel extends EventBus {
       home_lon: 0,
       home_alt_m: 0,
       show_offset: null,
+      sequencing: null,
       lineup: null,
       duration_s,
       tracks: [
@@ -126,6 +127,17 @@ export class ShowModel extends EventBus {
         d: round(s.show_offset.d, 3),
       };
     }
+    // Emit optional sequencing when non-zero.
+    if (s.sequencing) {
+      const q = s.sequencing;
+      if (q.startup_stagger_s || q.takeoff_stagger_s || q.landing_stagger_s) {
+        out.sequencing = {
+          startup_stagger_s: round(q.startup_stagger_s || 0, 2),
+          takeoff_stagger_s: round(q.takeoff_stagger_s || 0, 2),
+          landing_stagger_s: round(q.landing_stagger_s || 0, 2),
+        };
+      }
+    }
     // Emit optional lineup when present.
     if (s.lineup && s.lineup.positions) {
       const entries = Object.entries(s.lineup.positions)
@@ -140,6 +152,27 @@ export class ShowModel extends EventBus {
       }
     }
     return JSON.stringify(out, null, 2);
+  }
+
+  /** Merge the sequencing block (patch). Pass null to clear. */
+  setSequencing(seq) {
+    if (!this.show) return;
+    if (seq === null) {
+      this.show.sequencing = null;
+    } else {
+      const current = this.show.sequencing || {
+        startup_stagger_s: 0, takeoff_stagger_s: 0, landing_stagger_s: 0,
+      };
+      const merged = { ...current, ...seq };
+      // Clamp non-negative
+      for (const k of ["startup_stagger_s", "takeoff_stagger_s", "landing_stagger_s"]) {
+        if (merged[k] < 0) merged[k] = 0;
+      }
+      const all_zero = !merged.startup_stagger_s && !merged.takeoff_stagger_s && !merged.landing_stagger_s;
+      this.show.sequencing = all_zero ? null : merged;
+    }
+    this.dirty = true;
+    this.emit("show-changed");
   }
 
   /** Set or clear the show_offset. Pass null to clear, or {n,e,d} to set. */
@@ -492,10 +525,28 @@ function parseAndExpand(raw) {
     home_lon: typeof raw.home_lon === "number" ? raw.home_lon : 0,
     home_alt_m: typeof raw.home_alt_m === "number" ? raw.home_alt_m : 0,
     show_offset: null,
+    sequencing: null,
     lineup: null,
     duration_s: raw.duration_s,
     tracks: [],
   };
+
+  // Optional sequencing staggers
+  if (raw.sequencing && typeof raw.sequencing === "object") {
+    const seq = raw.sequencing;
+    const get = (k) =>
+      typeof seq[k] === "number" && seq[k] >= 0 ? seq[k] : 0;
+    const startup = get("startup_stagger_s");
+    const takeoff = get("takeoff_stagger_s");
+    const landing = get("landing_stagger_s");
+    if (startup || takeoff || landing) {
+      show.sequencing = {
+        startup_stagger_s: startup,
+        takeoff_stagger_s: takeoff,
+        landing_stagger_s: landing,
+      };
+    }
+  }
 
   // Optional show_offset (G54-style, applied by daemon at load)
   if (raw.show_offset && typeof raw.show_offset === "object") {
