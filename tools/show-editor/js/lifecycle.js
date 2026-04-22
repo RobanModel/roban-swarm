@@ -8,7 +8,8 @@
 
 // Daemon constants — keep in sync with flight_daemon.py
 export const DAEMON_DEFAULTS = Object.freeze({
-  HOVER_ALT_M: 5.0,               // takeoff + staging cruise altitude
+  HOVER_ALT_M: 5.0,               // heli 0's hover altitude
+  HOVER_ALT_STEP_M: 3.0,          // per-heli-index hover stack
   SPOOL_TIME_S: 8.0,              // rotor spool-up after arm
   RETURN_BASE_ALT_M: 8.0,         // first heli's return altitude
   RETURN_ALT_STEP_M: 3.0,         // +m per heli index
@@ -35,6 +36,7 @@ export class Lifecycle {
     const o = this.model.show?.ops ?? {};
     return {
       HOVER_ALT_M: o.hover_alt_m ?? DAEMON_DEFAULTS.HOVER_ALT_M,
+      HOVER_ALT_STEP_M: o.hover_alt_step_m ?? DAEMON_DEFAULTS.HOVER_ALT_STEP_M,
       SPOOL_TIME_S: o.spool_time_s ?? DAEMON_DEFAULTS.SPOOL_TIME_S,
       RETURN_BASE_ALT_M: o.return_base_alt_m ?? DAEMON_DEFAULTS.RETURN_BASE_ALT_M,
       RETURN_ALT_STEP_M: o.return_alt_step_m ?? DAEMON_DEFAULTS.RETURN_ALT_STEP_M,
@@ -42,6 +44,12 @@ export class Lifecycle {
       STAGING_SPEED_M_S: DAEMON_DEFAULTS.STAGING_SPEED_M_S,
       VERTICAL_SPEED_M_S: DAEMON_DEFAULTS.VERTICAL_SPEED_M_S,
     };
+  }
+
+  /** Per-heli staging hover altitude (positive m AGL). */
+  hoverAltFor(heliIdx) {
+    const ops = this._ops();
+    return ops.HOVER_ALT_M + heliIdx * ops.HOVER_ALT_STEP_M;
   }
 
   _sequencing() {
@@ -239,8 +247,10 @@ export class Lifecycle {
     const maxIdx = ids.length - 1;
     const spoolEndGlobal = maxIdx * seq.startup_stagger_s + ops.SPOOL_TIME_S;
     // 2. takeoff: each heli begins climb at idx*takeoff_stagger after spool end.
-    //    Per-heli takeoff duration depends on hover_alt and vertical speed (constant).
-    const takeoffDuration = ops.HOVER_ALT_M / ops.VERTICAL_SPEED_M_S;
+    //    Per-heli takeoff duration depends on ITS hover altitude (stacked).
+    //    Heli i climbs to base + i*step, so the top heli takes the longest.
+    const takeoffDuration = (ops.HOVER_ALT_M + maxIdx * ops.HOVER_ALT_STEP_M)
+                              / ops.VERTICAL_SPEED_M_S;
     // Global takeoff complete = spool end + max takeoff delay + takeoff duration
     const takeoffEndGlobal =
       spoolEndGlobal + maxIdx * seq.takeoff_stagger_s + takeoffDuration;
@@ -251,6 +261,8 @@ export class Lifecycle {
     const traverseInfo = {};
     let maxTraverseTime = 0;
     for (const id of ids) {
+      const idx = ids.indexOf(id);
+      const hoverAlt = ops.HOVER_ALT_M + idx * ops.HOVER_ALT_STEP_M;
       const track = this.model.getTrack(id);
       const wp0raw = track.waypoints[0]?.pos;
       const wp0 = wp0raw ? this.model.applyOffset(wp0raw) : null;
@@ -258,10 +270,10 @@ export class Lifecycle {
       if (!wp0 || !lineup) { traverseInfo[id] = null; continue; }
       const dist = Math.hypot(wp0.n - lineup.n, wp0.e - lineup.e);
       const traverseT = dist / ops.STAGING_SPEED_M_S;
-      // descent: from hover alt to wp0.d (alt = -wp0.d meters above ground)
-      const descentDepth = Math.abs(wp0.d - -ops.HOVER_ALT_M);
+      // descent: from this heli's hover alt (-hoverAlt) to wp0.d
+      const descentDepth = Math.abs(wp0.d - -hoverAlt);
       const descentT = descentDepth / ops.VERTICAL_SPEED_M_S;
-      traverseInfo[id] = { dist, traverseT, descentT };
+      traverseInfo[id] = { dist, traverseT, descentT, hoverAlt };
       if (traverseT > maxTraverseTime) maxTraverseTime = traverseT;
     }
     const traverseEndGlobal = takeoffEndGlobal + maxTraverseTime;
@@ -300,6 +312,7 @@ export class Lifecycle {
         takeoffStart, takeoffEnd,
         traverseStart, traverseEnd: heliTraverseEndAligned,
         descentStart, descentEnd,
+        hoverAlt: ti.hoverAlt, // this heli's stacked staging altitude
       };
     }
 
@@ -366,44 +379,44 @@ export class Lifecycle {
     const per = intro.perHeli[heli_id];
     if (!lineup || !wp0 || !per) return null;
 
-    const ops = this._ops();
+    const heliAlt = per.hoverAlt; // per-heli hover (stacked)
     // Convert globalT (negative) to intro-relative time (0 = intro start).
     const relT = globalT + intro.duration;
 
     // Pre-spool / spool / waiting for takeoff: on the ground at lineup.
     if (relT < per.takeoffStart) return { ...lineup };
-    // Takeoff: vertical 0 → -hover
+    // Takeoff: vertical 0 → -heliAlt (this heli's stacked hover level)
     if (relT < per.takeoffEnd) {
       const frac = (relT - per.takeoffStart) /
                    Math.max(1e-6, per.takeoffEnd - per.takeoffStart);
-      return { n: lineup.n, e: lineup.e, d: -ops.HOVER_ALT_M * frac };
+      return { n: lineup.n, e: lineup.e, d: -heliAlt * frac };
     }
     // Wait at hover over lineup until traverse begins
     if (relT < per.traverseStart) {
-      return { n: lineup.n, e: lineup.e, d: -ops.HOVER_ALT_M };
+      return { n: lineup.n, e: lineup.e, d: -heliAlt };
     }
-    // Horizontal traverse at hover_alt
+    // Horizontal traverse at this heli's stacked hover altitude
     if (relT < per.traverseEnd) {
       const frac = (relT - per.traverseStart) /
                    Math.max(1e-6, per.traverseEnd - per.traverseStart);
       return {
         n: lineup.n + (wp0.n - lineup.n) * frac,
         e: lineup.e + (wp0.e - lineup.e) * frac,
-        d: -ops.HOVER_ALT_M,
+        d: -heliAlt,
       };
     }
     // Hold at wp0 xy at hover until descent
     if (relT < per.descentStart) {
-      return { n: wp0.n, e: wp0.e, d: -ops.HOVER_ALT_M };
+      return { n: wp0.n, e: wp0.e, d: -heliAlt };
     }
-    // Descent to wp0.d
+    // Descent from -heliAlt down to wp0.d
     if (relT < per.descentEnd) {
       const frac = (relT - per.descentStart) /
                    Math.max(1e-6, per.descentEnd - per.descentStart);
       return {
         n: wp0.n,
         e: wp0.e,
-        d: -ops.HOVER_ALT_M + (wp0.d - -ops.HOVER_ALT_M) * frac,
+        d: -heliAlt + (wp0.d - -heliAlt) * frac,
       };
     }
     return { ...wp0 };

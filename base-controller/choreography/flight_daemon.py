@@ -35,7 +35,10 @@ TICK_INTERVAL = 1.0 / TICK_HZ
 # Startup
 SPOOL_TIME_S = 8.0              # TradiHeli rotor spool-up after arm
 TAKEOFF_DELAY_S = 3.0           # Between sequential takeoffs
-HOVER_ALT_M = 5.0               # Default takeoff hover altitude
+HOVER_ALT_M = 5.0               # Default takeoff hover altitude (heli 0)
+HOVER_ALT_STEP_M = 3.0          # Default per-heli hover stack during intro
+                                # (mirrors RETURN_ALT_STEP_M). Set to 0 to
+                                # revert to flat parallel hover.
 ARM_TIMEOUT_S = 15.0            # Wait for arm confirmation (helis can be slow)
 MODE_TIMEOUT_S = 5.0            # Wait for mode change confirmation
 
@@ -160,6 +163,17 @@ class FlightDaemon:
             if v is not None:
                 return v
         return default
+
+    def _hover_alt_for(self, heli_idx: int) -> float:
+        """Per-heli staging hover altitude (positive m AGL).
+
+        Intro altitude stack mirrors the outro return stack: heli i flies
+        at base + i * step during takeoff and horizontal traverse. Set
+        step to 0 in ops for flat parallel hover.
+        """
+        base = self._op("hover_alt_m", HOVER_ALT_M)
+        step = self._op("hover_alt_step_m", HOVER_ALT_STEP_M)
+        return base + heli_idx * step
 
     @property
     def state(self) -> DaemonState:
@@ -553,12 +567,16 @@ class FlightDaemon:
         await self._emit_phase_progress()
         seq = self._show.sequencing
         takeoff_stagger = (seq.takeoff_stagger_s if seq else 0.0)
-        hover_alt = self._op("hover_alt_m", HOVER_ALT_M)
+        base_alt = self._op("hover_alt_m", HOVER_ALT_M)
+        step_alt = self._op("hover_alt_step_m", HOVER_ALT_STEP_M)
+        max_alt = base_alt + (len(heli_ids) - 1) * step_alt
         if takeoff_stagger > 0:
-            log.info("Takeoff: staggered by %.1fs between helis (%.1fm hover)",
-                     takeoff_stagger, hover_alt)
+            log.info("Takeoff: staggered by %.1fs between helis "
+                     "(stack %.1f–%.1fm)",
+                     takeoff_stagger, base_alt, max_alt)
         else:
-            log.info("All helis taking off to %.1fm (parallel)", hover_alt)
+            log.info("Parallel takeoff, stacked (%.1f–%.1fm)",
+                     base_alt, max_alt)
 
         phase_start = time.monotonic()
         at_altitude = set()
@@ -570,18 +588,20 @@ class FlightDaemon:
             now = time.monotonic()
             for idx, heli_id in enumerate(heli_ids):
                 home = self._lineup.home_positions[heli_id]
+                heli_alt = self._hover_alt_for(idx)
                 # Before this heli's scheduled lift-off, hold on the ground.
                 heli_start = phase_start + idx * takeoff_stagger
                 if now < heli_start:
                     await self._send_safe(heli_id, home.n, home.e, 0.0)
                     continue
-                await self._send_safe(heli_id, home.n, home.e, -hover_alt)
+                await self._send_safe(heli_id, home.n, home.e, -heli_alt)
 
                 if heli_id not in at_altitude:
                     v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None
-                    if v and v.get("relative_alt_m", 0) >= (hover_alt - 1.0):
+                    if v and v.get("relative_alt_m", 0) >= (heli_alt - 1.0):
                         at_altitude.add(heli_id)
-                        log.info("Heli%02d at hover altitude", heli_id)
+                        log.info("Heli%02d at hover altitude (%.1fm)",
+                                 heli_id, heli_alt)
 
             if len(at_altitude) == len(heli_ids):
                 log.info("All helis at hover altitude")
@@ -607,17 +627,17 @@ class FlightDaemon:
         await self._emit_phase_progress()
         await self._emit_event({"type": "show_event", "event": "staging_traverse"})
 
-        # Phase 1: Fly horizontally at hover altitude to target N/E
-        hover_alt = self._op("hover_alt_m", HOVER_ALT_M)
-        log.info("Staging phase 1: horizontal traverse at hover altitude (%.1fm)",
-                 hover_alt)
+        # Phase 1: Fly horizontally at each heli's staged hover altitude.
+        # Helis at different hover levels can't cross at the same altitude,
+        # so intro path crossings are safe by construction.
+        log.info("Staging phase 1: horizontal traverse (stacked hover)")
         arrived_horiz = set()
         deadline = time.monotonic() + 30
         while self._state == DaemonState.STAGING:
-            for heli_id in heli_ids:
+            for idx, heli_id in enumerate(heli_ids):
                 t = targets[heli_id]
-                # Keep at hover altitude, fly to target N/E
-                await self._send_safe(heli_id, t.n, t.e, -hover_alt)
+                heli_alt = self._hover_alt_for(idx)
+                await self._send_safe(heli_id, t.n, t.e, -heli_alt)
 
                 if heli_id not in arrived_horiz:
                     v = self._tracker.get(self._sysid(heli_id)) if self._tracker else None

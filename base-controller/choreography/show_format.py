@@ -128,7 +128,17 @@ class OpsOverrides(BaseModel):
     """
     hover_alt_m: Optional[float] = Field(
         default=None, gt=0,
-        description="Takeoff + staging cruise altitude. Default 5.0m.",
+        description="First heli's takeoff + staging cruise altitude. "
+                    "Default 5.0m. Heli i hovers at "
+                    "hover_alt_m + i * hover_alt_step_m.",
+    )
+    hover_alt_step_m: Optional[float] = Field(
+        default=None, ge=0,
+        description="Per-heli-index step added to hover_alt_m during "
+                    "intro. Stacks helis at different altitudes during "
+                    "the horizontal traverse so their paths can't cross "
+                    "at the same level — mirrors the outro return stack. "
+                    "Default 3.0m. Set to 0 for flat parallel hover.",
     )
     spool_time_s: Optional[float] = Field(
         default=None, ge=0,

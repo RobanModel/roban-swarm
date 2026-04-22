@@ -619,7 +619,7 @@ function parseAndExpand(raw) {
   // Optional ops overrides (per-show overrides of daemon constants).
   if (raw.ops && typeof raw.ops === "object") {
     const allowed = [
-      "hover_alt_m", "spool_time_s",
+      "hover_alt_m", "hover_alt_step_m", "spool_time_s",
       "return_base_alt_m", "return_alt_step_m",
       "landing_descent_rate",
     ];

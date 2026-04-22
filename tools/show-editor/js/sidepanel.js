@@ -145,7 +145,8 @@ export class SidePanel {
     const ops = s.ops || {};
     const has = !!s.ops && Object.keys(ops).length > 0;
     const fields = [
-      ["hover_alt_m", "hover alt (m)", DAEMON_DEFAULTS.HOVER_ALT_M],
+      ["hover_alt_m", "hover alt base (m)", DAEMON_DEFAULTS.HOVER_ALT_M],
+      ["hover_alt_step_m", "hover alt step (m)", DAEMON_DEFAULTS.HOVER_ALT_STEP_M],
       ["spool_time_s", "spool time (s)", DAEMON_DEFAULTS.SPOOL_TIME_S],
       ["return_base_alt_m", "return base alt (m)", DAEMON_DEFAULTS.RETURN_BASE_ALT_M],
       ["return_alt_step_m", "return alt step (m)", DAEMON_DEFAULTS.RETURN_ALT_STEP_M],
